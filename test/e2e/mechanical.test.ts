@@ -52,7 +52,7 @@ describeE2E('E2E: Page CRUD', () => {
 
   test('fixture import creates correct page count', async () => {
     const stats = await callOp('get_stats') as any;
-    expect(stats.page_count).toBe(13);
+    expect(stats.page_count).toBe(16);
   });
 
   test('get_page returns correct data for person', async () => {
@@ -82,10 +82,10 @@ describeE2E('E2E: Page CRUD', () => {
     expect(people.length).toBe(3);
 
     const companies = await callOp('list_pages', { type: 'company' }) as any[];
-    expect(companies.length).toBe(2);
+    expect(companies.length).toBe(3); // novamind, threshold-ventures, ohmygreen
 
     const concepts = await callOp('list_pages', { type: 'concept' }) as any[];
-    expect(concepts.length).toBe(3);
+    expect(concepts.length).toBe(5); // compiled-truth, hybrid-search, RAG, notes-march-2024, big-file
   });
 
   test('list_pages tag filter works', async () => {
@@ -108,7 +108,7 @@ describeE2E('E2E: Page CRUD', () => {
   test('delete_page removes page and others survive', async () => {
     await callOp('delete_page', { slug: 'sources/crustdata-sarah-chen' });
     const stats = await callOp('get_stats') as any;
-    expect(stats.page_count).toBe(12);
+    expect(stats.page_count).toBe(15);
 
     // Other pages still exist
     const sarah = await callOp('get_page', { slug: 'people/sarah-chen' }) as any;
@@ -329,7 +329,7 @@ describeE2E('E2E: Admin', () => {
 
   test('get_stats returns valid structure', async () => {
     const stats = await callOp('get_stats') as any;
-    expect(stats.page_count).toBe(13);
+    expect(stats.page_count).toBe(16);
     expect(typeof stats.chunk_count).toBe('number');
   });
 
@@ -772,9 +772,14 @@ describeE2E('E2E: Doctor Command', () => {
   afterAll(teardownDB);
 
   const cliCwd = join(import.meta.dir, '../..');
-  const cliEnv = () => ({ ...process.env, DATABASE_URL: process.env.DATABASE_URL! });
+  const cliEnv = () => ({ ...process.env, DATABASE_URL: process.env.DATABASE_URL!, GBRAIN_DATABASE_URL: process.env.DATABASE_URL! });
 
   test('gbrain doctor exits 0 on healthy DB', () => {
+    // Init first so config exists for CLI
+    Bun.spawnSync({
+      cmd: ['bun', 'run', 'src/cli.ts', 'init', '--non-interactive', '--url', process.env.DATABASE_URL!],
+      cwd: cliCwd, env: cliEnv(), timeout: 15_000,
+    });
     const result = Bun.spawnSync({
       cmd: ['bun', 'run', 'src/cli.ts', 'doctor'],
       cwd: cliCwd,
@@ -812,7 +817,14 @@ describeE2E('E2E: Parallel Import', () => {
   afterAll(teardownDB);
 
   const cliCwd = join(import.meta.dir, '../..');
-  const cliEnv = () => ({ ...process.env, DATABASE_URL: process.env.DATABASE_URL! });
+  const cliEnv = () => ({ ...process.env, DATABASE_URL: process.env.DATABASE_URL!, GBRAIN_DATABASE_URL: process.env.DATABASE_URL! });
+
+  function initCli() {
+    Bun.spawnSync({
+      cmd: ['bun', 'run', 'src/cli.ts', 'init', '--non-interactive', '--url', process.env.DATABASE_URL!],
+      cwd: cliCwd, env: cliEnv(), timeout: 15_000,
+    });
+  }
 
   // Store sequential baseline for comparison
   let seqPageCount: number;
@@ -821,6 +833,7 @@ describeE2E('E2E: Parallel Import', () => {
 
   test('sequential baseline: import all fixtures', async () => {
     await setupDB();
+    initCli();
     const result = Bun.spawnSync({
       cmd: ['bun', 'run', 'src/cli.ts', 'import', '--no-embed', FIXTURES_PATH],
       cwd: cliCwd,
@@ -842,6 +855,7 @@ describeE2E('E2E: Parallel Import', () => {
 
   test('parallel import with --workers 2 matches sequential page count', async () => {
     await setupDB();
+    initCli();
     const result = Bun.spawnSync({
       cmd: ['bun', 'run', 'src/cli.ts', 'import', '--no-embed', '--workers', '2', FIXTURES_PATH],
       cwd: cliCwd,
@@ -886,6 +900,7 @@ describeE2E('E2E: Parallel Import', () => {
 
   test('parallel import with --workers 4 also works', async () => {
     await setupDB();
+    initCli();
     const result = Bun.spawnSync({
       cmd: ['bun', 'run', 'src/cli.ts', 'import', '--no-embed', '--workers', '4', FIXTURES_PATH],
       cwd: cliCwd,

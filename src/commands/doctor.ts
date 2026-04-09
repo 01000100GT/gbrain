@@ -89,9 +89,9 @@ export async function runDoctor(engine: BrainEngine, args: string[]) {
 
 function outputResults(checks: Check[], json: boolean) {
   if (json) {
-    const allOk = checks.every(c => c.status === 'ok');
-    console.log(JSON.stringify({ status: allOk ? 'healthy' : 'issues', checks }));
-    process.exit(allOk ? 0 : 1);
+    const hasFail = checks.some(c => c.status === 'fail');
+    console.log(JSON.stringify({ status: hasFail ? 'unhealthy' : 'healthy', checks }));
+    process.exit(hasFail ? 1 : 0);
     return;
   }
 
@@ -102,7 +102,14 @@ function outputResults(checks: Check[], json: boolean) {
     console.log(`  [${icon}] ${c.name}: ${c.message}`);
   }
 
-  const allOk = checks.every(c => c.status === 'ok');
-  console.log(`\n${allOk ? 'All checks passed.' : 'Some checks need attention.'}`);
-  process.exit(allOk ? 0 : 1);
+  const hasFail = checks.some(c => c.status === 'fail');
+  const hasWarn = checks.some(c => c.status === 'warn');
+  if (hasFail) {
+    console.log('\nFailed checks found. Fix the issues above.');
+  } else if (hasWarn) {
+    console.log('\nAll checks OK (some warnings).');
+  } else {
+    console.log('\nAll checks passed.');
+  }
+  process.exit(hasFail ? 1 : 0);
 }

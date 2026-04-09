@@ -19,12 +19,16 @@ function defaultWorkers(): number {
 }
 
 export async function runImport(engine: BrainEngine, args: string[]) {
-  const dir = args.find(a => !a.startsWith('--'));
   const noEmbed = args.includes('--no-embed');
   const fresh = args.includes('--fresh');
   const jsonOutput = args.includes('--json');
-  const workersArg = args.find((a, i) => args[i - 1] === '--workers');
+  const workersIdx = args.indexOf('--workers');
+  const workersArg = workersIdx !== -1 ? args[workersIdx + 1] : null;
   const workerCount = workersArg ? parseInt(workersArg, 10) : 1;
+  // Find dir: first non-flag arg that isn't a value for --workers
+  const flagValues = new Set<number>();
+  if (workersIdx !== -1) flagValues.add(workersIdx + 1);
+  const dir = args.find((a, i) => !a.startsWith('--') && !flagValues.has(i));
 
   if (!dir) {
     console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--json]');
