@@ -2,6 +2,8 @@
 
 The memex Vannevar Bush imagined, built for people who think for a living.
 
+**GBrain is a knowledge brain for [OpenClaw](https://openclaw.com) agents.** It gives your agent a searchable, indexed memory over your markdown repos using Postgres + pgvector + hybrid search. Works with any OpenClaw agent. Paste the install instructions into your agent, and it handles the rest.
+
 ### What one brain looks like
 
 Here's what one person built with gbrain and a single AI agent over six months:
