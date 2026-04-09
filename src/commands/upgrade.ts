@@ -15,7 +15,7 @@ export async function runUpgrade(args: string[]) {
       console.log('Upgrading via bun...');
       try {
         execSync('bun update gbrain', { stdio: 'inherit', timeout: 120_000 });
-        console.log('Upgrade complete.');
+        verifyUpgrade();
       } catch {
         console.error('Upgrade failed. Try running manually: bun update gbrain');
       }
@@ -31,7 +31,7 @@ export async function runUpgrade(args: string[]) {
       console.log('Upgrading via ClawHub...');
       try {
         execSync('clawhub update gbrain', { stdio: 'inherit', timeout: 120_000 });
-        console.log('Upgrade complete.');
+        verifyUpgrade();
       } catch {
         console.error('ClawHub upgrade failed. Try: clawhub update gbrain');
       }
@@ -43,6 +43,15 @@ export async function runUpgrade(args: string[]) {
       console.log('  bun update gbrain');
       console.log('  clawhub update gbrain');
       console.log('  Download from https://github.com/garrytan/gbrain/releases');
+  }
+}
+
+function verifyUpgrade() {
+  try {
+    const output = execSync('gbrain --version', { encoding: 'utf-8', timeout: 10_000 }).trim();
+    console.log(`Upgrade complete. Now running: ${output}`);
+  } catch {
+    console.log('Upgrade complete. Could not verify new version.');
   }
 }
 

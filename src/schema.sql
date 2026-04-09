@@ -149,7 +149,6 @@ CREATE TABLE IF NOT EXISTS files (
   page_slug    TEXT   REFERENCES pages(slug) ON DELETE SET NULL ON UPDATE CASCADE,
   filename     TEXT   NOT NULL,
   storage_path TEXT   NOT NULL,
-  storage_url  TEXT   NOT NULL,
   mime_type    TEXT,
   size_bytes   BIGINT,
   content_hash TEXT   NOT NULL,
@@ -157,6 +156,9 @@ CREATE TABLE IF NOT EXISTS files (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(storage_path)
 );
+
+-- Migration: drop storage_url if it exists (renamed to storage_path only)
+ALTER TABLE files DROP COLUMN IF EXISTS storage_url;
 
 CREATE INDEX IF NOT EXISTS idx_files_page ON files(page_slug);
 CREATE INDEX IF NOT EXISTS idx_files_hash ON files(content_hash);

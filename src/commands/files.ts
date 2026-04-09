@@ -9,7 +9,6 @@ interface FileRecord {
   page_slug: string | null;
   filename: string;
   storage_path: string;
-  storage_url: string;
   mime_type: string | null;
   size_bytes: number;
   content_hash: string;
@@ -108,13 +107,9 @@ async function uploadFile(args: string[]) {
     return;
   }
 
-  // TODO: actual Supabase Storage upload goes here
-  // For now, record metadata in Postgres
-  const storageUrl = `https://storage.supabase.co/brain-files/${storagePath}`;
-
   await sql`
-    INSERT INTO files (page_slug, filename, storage_path, storage_url, mime_type, size_bytes, content_hash, metadata)
-    VALUES (${pageSlug}, ${filename}, ${storagePath}, ${storageUrl}, ${mimeType}, ${stat.size}, ${hash}, ${'{}'}::jsonb)
+    INSERT INTO files (page_slug, filename, storage_path, mime_type, size_bytes, content_hash, metadata)
+    VALUES (${pageSlug}, ${filename}, ${storagePath}, ${mimeType}, ${stat.size}, ${hash}, ${'{}'}::jsonb)
     ON CONFLICT (storage_path) DO UPDATE SET
       content_hash = EXCLUDED.content_hash,
       size_bytes = EXCLUDED.size_bytes,
@@ -161,11 +156,9 @@ async function syncFiles(dir?: string) {
     const pathParts = relativePath.split('/');
     const pageSlug = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : null;
 
-    const storageUrl = `https://storage.supabase.co/brain-files/${storagePath}`;
-
     await sql`
-      INSERT INTO files (page_slug, filename, storage_path, storage_url, mime_type, size_bytes, content_hash, metadata)
-      VALUES (${pageSlug}, ${filename}, ${storagePath}, ${storageUrl}, ${mimeType}, ${stat.size}, ${hash}, ${'{}'}::jsonb)
+      INSERT INTO files (page_slug, filename, storage_path, mime_type, size_bytes, content_hash, metadata)
+      VALUES (${pageSlug}, ${filename}, ${storagePath}, ${mimeType}, ${stat.size}, ${hash}, ${'{}'}::jsonb)
       ON CONFLICT (storage_path) DO UPDATE SET
         content_hash = EXCLUDED.content_hash,
         size_bytes = EXCLUDED.size_bytes,

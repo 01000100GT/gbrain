@@ -4,17 +4,28 @@ import { saveConfig, type GBrainConfig } from '../core/config.ts';
 
 export async function runInit(args: string[]) {
   const isSupabase = args.includes('--supabase');
+  const isNonInteractive = args.includes('--non-interactive');
   const urlIndex = args.indexOf('--url');
   const manualUrl = urlIndex !== -1 ? args[urlIndex + 1] : null;
+  const keyIndex = args.indexOf('--key');
+  const apiKey = keyIndex !== -1 ? args[keyIndex + 1] : null;
 
   let databaseUrl: string;
 
   if (manualUrl) {
     databaseUrl = manualUrl;
+  } else if (isNonInteractive) {
+    // Non-interactive mode requires --url
+    const envUrl = process.env.GBRAIN_DATABASE_URL || process.env.DATABASE_URL;
+    if (envUrl) {
+      databaseUrl = envUrl;
+    } else {
+      console.error('--non-interactive requires --url <connection_string> or GBRAIN_DATABASE_URL env var');
+      process.exit(1);
+    }
   } else if (isSupabase) {
     databaseUrl = await supabaseWizard();
   } else {
-    // Default to supabase wizard
     databaseUrl = await supabaseWizard();
   }
 
@@ -30,6 +41,7 @@ export async function runInit(args: string[]) {
   const config: GBrainConfig = {
     engine: 'postgres',
     database_url: databaseUrl,
+    ...(apiKey ? { openai_api_key: apiKey } : {}),
   };
   saveConfig(config);
   console.log('Config saved to ~/.gbrain/config.json');
