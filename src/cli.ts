@@ -19,7 +19,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'upgrade', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor']);
+const CLI_ONLY = new Set(['init', 'upgrade', 'check-update', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor']);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -233,6 +233,11 @@ async function handleCliOnly(command: string, args: string[]) {
     await runUpgrade(args);
     return;
   }
+  if (command === 'check-update') {
+    const { runCheckUpdate } = await import('./commands/check-update.ts');
+    await runCheckUpdate(args);
+    return;
+  }
 
   // All remaining CLI-only commands need a DB connection
   const engine = await connectEngine();
@@ -325,6 +330,7 @@ USAGE
 SETUP
   init [--supabase|--url <conn>]     Create brain (guided wizard)
   upgrade                            Self-update
+  check-update [--json]              Check for new versions
   doctor [--json]                    Health check (pgvector, RLS, schema, embeddings)
 
 PAGES

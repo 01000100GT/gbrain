@@ -55,7 +55,7 @@ function verifyUpgrade() {
   }
 }
 
-function detectInstallMethod(): 'bun' | 'binary' | 'clawhub' | 'unknown' {
+export function detectInstallMethod(): 'bun' | 'binary' | 'clawhub' | 'unknown' {
   const execPath = process.execPath || '';
 
   // Check if running from node_modules (bun/npm install)
