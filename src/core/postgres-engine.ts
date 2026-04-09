@@ -234,25 +234,34 @@ export class PostgresEngine implements BrainEngine {
     // Delete existing chunks for this page
     await sql`DELETE FROM content_chunks WHERE page_id = ${pageId}`;
 
-    // Insert new chunks
+    // Bulk insert chunks — build multi-row VALUES to reduce round-trips
     if (chunks.length === 0) return;
+
+    // postgres.js tagged templates don't handle vector casting in bulk,
+    // so we build a parameterized raw SQL query
+    const cols = '(page_id, chunk_index, chunk_text, chunk_source, embedding, model, token_count, embedded_at)';
+    const rows: string[] = [];
+    const params: unknown[] = [];
+    let paramIdx = 1;
 
     for (const chunk of chunks) {
       const embeddingStr = chunk.embedding
         ? '[' + Array.from(chunk.embedding).join(',') + ']'
         : null;
 
-      await sql`
-        INSERT INTO content_chunks (page_id, chunk_index, chunk_text, chunk_source, embedding, model, token_count, embedded_at)
-        VALUES (
-          ${pageId}, ${chunk.chunk_index}, ${chunk.chunk_text}, ${chunk.chunk_source},
-          ${embeddingStr ? sql`${embeddingStr}::vector` : sql`NULL`},
-          ${chunk.model || 'text-embedding-3-large'},
-          ${chunk.token_count || null},
-          ${chunk.embedding ? sql`now()` : sql`NULL`}
-        )
-      `;
+      if (embeddingStr) {
+        rows.push(`($${paramIdx++}, $${paramIdx++}, $${paramIdx++}, $${paramIdx++}, $${paramIdx++}::vector, $${paramIdx++}, $${paramIdx++}, now())`);
+        params.push(pageId, chunk.chunk_index, chunk.chunk_text, chunk.chunk_source, embeddingStr, chunk.model || 'text-embedding-3-large', chunk.token_count || null);
+      } else {
+        rows.push(`($${paramIdx++}, $${paramIdx++}, $${paramIdx++}, $${paramIdx++}, NULL, $${paramIdx++}, $${paramIdx++}, NULL)`);
+        params.push(pageId, chunk.chunk_index, chunk.chunk_text, chunk.chunk_source, chunk.model || 'text-embedding-3-large', chunk.token_count || null);
+      }
     }
+
+    await sql.unsafe(
+      `INSERT INTO content_chunks ${cols} VALUES ${rows.join(', ')}`,
+      params,
+    );
   }
 
   async getChunks(slug: string): Promise<Chunk[]> {
