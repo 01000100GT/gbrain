@@ -22,13 +22,16 @@ STEP 1 — INSTALL
   bun add github:garrytan/gbrain
   Verify: gbrain --version
 
-STEP 2 — DATABASE
-  Run: gbrain init --supabase
-  Ask the user for their Supabase Shared Pooler connection string:
-    "Go to https://supabase.com → your project → Get Connected →
-     Direct Connection String → Session Pooler → copy Shared Pooler"
-  Do NOT ask for the anon key or project URL. Those are wrong.
+STEP 2 — START HERE
+  Run: gbrain init
+  This creates a local PGLite brain (embedded Postgres, no server needed).
+  Brain ready in ~2 seconds. No accounts, no connection strings.
   Verify: gbrain doctor --json (all checks pass)
+  
+  For large brains (1000+ files) or remote access, use Supabase instead:
+    gbrain init --supabase
+    Then provide your Supabase Shared Pooler connection string.
+  You can migrate anytime: gbrain migrate --to supabase
 
 STEP 3 — IMPORT
   Find markdown: find ~/git ~/Documents ~/notes -maxdepth 3 -name "*.md" | head -30
