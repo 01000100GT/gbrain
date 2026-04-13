@@ -8,9 +8,10 @@
  */
 
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
-import { rrfFusion } from '../src/core/search/hybrid.ts';
+import { rrfFusion, hybridSearch } from '../src/core/search/hybrid.ts';
 import { dedupResults } from '../src/core/search/dedup.ts';
 import { precisionAtK, recallAtK, mrr, ndcgAtK } from '../src/core/search/eval.ts';
+import { autoDetectDetail } from '../src/core/search/intent.ts';
 import type { SearchResult, ChunkInput } from '../src/core/types.ts';
 
 // ─── Config ──────────────────────────────────────────────────────
@@ -261,6 +262,50 @@ function rrfFusionBaseline(lists: SearchResult[][]): SearchResult[] {
     .map(({ result, score }) => ({ ...result, score }));
 }
 
+// Intent-aware benchmark: uses the classifier to set detail per query
+// and skips boost for detail=high (temporal/event queries)
+async function runBenchmarkWithIntent(
+  engine: PGLiteEngine,
+  queries: BenchmarkQuery[],
+): Promise<RunResult[]> {
+  const results: RunResult[] = [];
+
+  for (const q of queries) {
+    const detail = autoDetectDetail(q.query);
+    const applyBoost = detail !== 'high';
+
+    // Get keyword results with detail filter
+    const keywordResults = await engine.searchKeyword(q.query, { limit: 20, detail });
+
+    // Get vector results with detail filter
+    const vectorResults = await engine.searchVector(q.queryEmbedding, { limit: 20, detail });
+
+    // RRF with conditional boost (skip for temporal/event queries)
+    let fused = rrfFusion([vectorResults, keywordResults], RRF_K, applyBoost);
+
+    // Dedup
+    const deduped = dedupResults(fused);
+    const top5 = deduped.slice(0, 5);
+
+    const relevantSet = new Set(q.relevant);
+    const gradesMap = new Map(q.relevant.map(s => [s, 1]));
+    const hitSlugs = top5.map(r => r.slug);
+
+    results.push({
+      queryId: q.id,
+      hits: top5,
+      topSource: top5.length > 0 ? top5[0].chunk_source : 'none',
+      topSlug: top5.length > 0 ? top5[0].slug : '',
+      precision1: precisionAtK(hitSlugs, relevantSet, 1),
+      mrr: mrr(hitSlugs, relevantSet),
+      ndcg5: ndcgAtK(hitSlugs, gradesMap, 5),
+      sourceCorrect: top5.length > 0 ? top5[0].chunk_source === q.expectedSource : q.relevant.length === 0,
+    });
+  }
+
+  return results;
+}
+
 // ─── Output ──────────────────────────────────────────────────────
 
 function formatResults(label: string, results: RunResult[]): string {
@@ -317,6 +362,17 @@ async function main() {
   // Run boosted (PR #64)
   const boosted = await runBenchmark(engine, QUERIES, true);
 
+  // Run with intent classifier (PR #64 + auto-detail)
+  const withIntent = await runBenchmarkWithIntent(engine, QUERIES);
+
+  // Show intent classifications
+  console.log('Intent classifications:');
+  for (const q of QUERIES) {
+    const detail = autoDetectDetail(q.query);
+    console.log(`  "${q.query}" → detail=${detail ?? 'medium (default)'}`);
+  }
+  console.log('');
+
   // Generate markdown
   const date = new Date().toISOString().split('T')[0];
   const md: string[] = [];
@@ -325,55 +381,71 @@ async function main() {
   md.push('');
   md.push('## PR #64 Impact Analysis');
   md.push('');
-  md.push('Comparing search quality before and after the search quality boost (compiled truth');
-  md.push('ranking, RRF normalization, source-aware dedup). Measured against 5 seeded brain');
+  md.push('Three-way comparison: baseline (no boost) vs PR#64 (boost only) vs PR#64 + intent');
+  md.push('classifier (auto-selects detail level per query). Measured against 5 seeded brain');
   md.push('pages with 10 chunks total, using 8 benchmark queries with structured mock embeddings.');
   md.push('');
   md.push('Inspired by [Ramp Labs\' "Latent Briefing" paper](https://ramp.com) (April 2026).');
   md.push('');
 
+  md.push('## Intent Classifications');
+  md.push('');
+  md.push('| Query | Detected Intent | Detail Level |');
+  md.push('|-------|----------------|-------------|');
+  for (const q of QUERIES) {
+    const detail = autoDetectDetail(q.query);
+    md.push(`| ${q.query} | ${detail ? (detail === 'low' ? 'entity' : detail === 'high' ? 'temporal/event' : 'general') : 'general'} | ${detail ?? 'medium'} |`);
+  }
+  md.push('');
+
   md.push('## Results');
   md.push('');
-  md.push(formatResults('Baseline (pre-PR#64, no boost)', baseline));
+  md.push(formatResults('A. Baseline (pre-PR#64, no boost)', baseline));
   md.push('');
-  md.push(formatResults('PR #64 (compiled truth boost + RRF normalization)', boosted));
+  md.push(formatResults('B. PR #64 (compiled truth boost only)', boosted));
+  md.push('');
+  md.push(formatResults('C. PR #64 + Intent Classifier (auto-detail)', withIntent));
   md.push('');
 
-  // Delta analysis
-  const baselineValid = baseline.filter(r => QUERIES.find(q => q.id === r.queryId)!.relevant.length > 0);
-  const boostedValid = boosted.filter(r => QUERIES.find(q => q.id === r.queryId)!.relevant.length > 0);
+  // Helper to compute means
+  function computeMeans(results: RunResult[]) {
+    const valid = results.filter(r => QUERIES.find(q => q.id === r.queryId)!.relevant.length > 0);
+    return {
+      p1: valid.reduce((s, r) => s + r.precision1, 0) / valid.length,
+      mrr: valid.reduce((s, r) => s + r.mrr, 0) / valid.length,
+      ndcg: valid.reduce((s, r) => s + r.ndcg5, 0) / valid.length,
+      src: valid.filter(r => r.sourceCorrect).length / valid.length,
+    };
+  }
 
-  const bP1 = baselineValid.reduce((s, r) => s + r.precision1, 0) / baselineValid.length;
-  const aP1 = boostedValid.reduce((s, r) => s + r.precision1, 0) / boostedValid.length;
-  const bMRR = baselineValid.reduce((s, r) => s + r.mrr, 0) / baselineValid.length;
-  const aMRR = boostedValid.reduce((s, r) => s + r.mrr, 0) / boostedValid.length;
-  const bNDCG = baselineValid.reduce((s, r) => s + r.ndcg5, 0) / baselineValid.length;
-  const aNDCG = boostedValid.reduce((s, r) => s + r.ndcg5, 0) / boostedValid.length;
-  const bSrc = baselineValid.filter(r => r.sourceCorrect).length / baselineValid.length;
-  const aSrc = boostedValid.filter(r => r.sourceCorrect).length / boostedValid.length;
+  const bm = computeMeans(baseline);
+  const am = computeMeans(boosted);
+  const im = computeMeans(withIntent);
 
   md.push('## Delta Analysis');
   md.push('');
-  md.push('| Metric | Baseline | PR #64 | Delta | Change |');
-  md.push('|--------|----------|--------|-------|--------|');
-  md.push(`| Mean P@1 | ${bP1.toFixed(3)} | ${aP1.toFixed(3)} | ${(aP1 - bP1) >= 0 ? '+' : ''}${(aP1 - bP1).toFixed(3)} | ${((aP1 - bP1) / (bP1 || 1) * 100).toFixed(1)}% |`);
-  md.push(`| Mean MRR | ${bMRR.toFixed(3)} | ${aMRR.toFixed(3)} | ${(aMRR - bMRR) >= 0 ? '+' : ''}${(aMRR - bMRR).toFixed(3)} | ${((aMRR - bMRR) / (bMRR || 1) * 100).toFixed(1)}% |`);
-  md.push(`| Mean nDCG@5 | ${bNDCG.toFixed(3)} | ${aNDCG.toFixed(3)} | ${(aNDCG - bNDCG) >= 0 ? '+' : ''}${(aNDCG - bNDCG).toFixed(3)} | ${((aNDCG - bNDCG) / (bNDCG || 1) * 100).toFixed(1)}% |`);
-  md.push(`| Source Accuracy | ${(bSrc * 100).toFixed(1)}% | ${(aSrc * 100).toFixed(1)}% | ${((aSrc - bSrc) * 100) >= 0 ? '+' : ''}${((aSrc - bSrc) * 100).toFixed(1)}pp | — |`);
+  md.push('| Metric | Baseline | Boost Only | + Intent | B vs A | C vs A |');
+  md.push('|--------|----------|------------|----------|--------|--------|');
+  md.push(`| Mean P@1 | ${bm.p1.toFixed(3)} | ${am.p1.toFixed(3)} | ${im.p1.toFixed(3)} | ${(am.p1 - bm.p1) >= 0 ? '+' : ''}${(am.p1 - bm.p1).toFixed(3)} | ${(im.p1 - bm.p1) >= 0 ? '+' : ''}${(im.p1 - bm.p1).toFixed(3)} |`);
+  md.push(`| Mean MRR | ${bm.mrr.toFixed(3)} | ${am.mrr.toFixed(3)} | ${im.mrr.toFixed(3)} | ${(am.mrr - bm.mrr) >= 0 ? '+' : ''}${(am.mrr - bm.mrr).toFixed(3)} | ${(im.mrr - bm.mrr) >= 0 ? '+' : ''}${(im.mrr - bm.mrr).toFixed(3)} |`);
+  md.push(`| Mean nDCG@5 | ${bm.ndcg.toFixed(3)} | ${am.ndcg.toFixed(3)} | ${im.ndcg.toFixed(3)} | ${(am.ndcg - bm.ndcg) >= 0 ? '+' : ''}${(am.ndcg - bm.ndcg).toFixed(3)} | ${(im.ndcg - bm.ndcg) >= 0 ? '+' : ''}${(im.ndcg - bm.ndcg).toFixed(3)} |`);
+  md.push(`| Source Accuracy | ${(bm.src * 100).toFixed(1)}% | ${(am.src * 100).toFixed(1)}% | ${(im.src * 100).toFixed(1)}% | ${((am.src - bm.src) * 100) >= 0 ? '+' : ''}${((am.src - bm.src) * 100).toFixed(1)}pp | ${((im.src - bm.src) * 100) >= 0 ? '+' : ''}${((im.src - bm.src) * 100).toFixed(1)}pp |`);
   md.push('');
 
   // Per-query delta
   md.push('## Per-Query Comparison');
   md.push('');
-  md.push('| Query | Baseline P@1 | PR#64 P@1 | Baseline Source | PR#64 Source | Improved? |');
-  md.push('|-------|-------------|-----------|-----------------|-------------|-----------|');
+  md.push('| Query | Detail | Base Src | Boost Src | Intent Src | Expected | Winner |');
+  md.push('|-------|--------|----------|-----------|------------|----------|--------|');
   for (let i = 0; i < QUERIES.length; i++) {
     const q = QUERIES[i];
     if (q.relevant.length === 0) continue;
     const b = baseline[i];
     const a = boosted[i];
-    const improved = a.precision1 > b.precision1 || (a.sourceCorrect && !b.sourceCorrect);
-    md.push(`| ${q.description.slice(0, 45)} | ${b.precision1.toFixed(2)} | ${a.precision1.toFixed(2)} | ${b.topSource} | ${a.topSource} | ${improved ? 'YES' : a.precision1 === b.precision1 ? 'SAME' : 'NO'} |`);
+    const c = withIntent[i];
+    const detail = autoDetectDetail(q.query) ?? 'medium';
+    const winner = c.sourceCorrect ? 'Intent' : a.sourceCorrect ? 'Boost' : b.sourceCorrect ? 'Base' : 'None';
+    md.push(`| ${q.description.slice(0, 40)} | ${detail} | ${b.topSource.slice(0, 8)} | ${a.topSource.slice(0, 8)} | ${c.topSource.slice(0, 8)} | ${q.expectedSource.slice(0, 8)} | ${winner} |`);
   }
   md.push('');
 

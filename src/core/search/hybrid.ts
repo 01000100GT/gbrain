@@ -14,6 +14,7 @@ import { MAX_SEARCH_LIMIT, clampSearchLimit } from '../engine.ts';
 import type { SearchResult, SearchOpts } from '../types.ts';
 import { embed } from '../embedding.ts';
 import { dedupResults } from './dedup.ts';
+import { autoDetectDetail } from './intent.ts';
 
 const RRF_K = 60;
 const COMPILED_TRUTH_BOOST = 2.0;
@@ -40,7 +41,14 @@ export async function hybridSearch(
   const limit = opts?.limit || 20;
   const offset = opts?.offset || 0;
   const innerLimit = Math.min(limit * 2, MAX_SEARCH_LIMIT);
-  const searchOpts: SearchOpts = { limit: innerLimit, detail: opts?.detail };
+
+  // Auto-detect detail level from query intent when caller doesn't specify
+  const detail = opts?.detail ?? autoDetectDetail(query);
+  const searchOpts: SearchOpts = { limit: innerLimit, detail };
+
+  if (DEBUG && detail) {
+    console.error(`[search-debug] auto-detail=${detail} for query="${query}"`);
+  }
 
   // Run keyword search (always available, no API key needed)
   const keywordResults = await engine.searchKeyword(query, searchOpts);
@@ -81,8 +89,9 @@ export async function hybridSearch(
   }
 
   // Merge all result lists via RRF (includes normalization + boost)
+  // Skip boost for detail=high (temporal/event queries want natural ranking)
   const allLists = [...vectorLists, keywordResults];
-  let fused = rrfFusion(allLists, opts?.rrfK ?? RRF_K);
+  let fused = rrfFusion(allLists, opts?.rrfK ?? RRF_K, detail !== 'high');
 
   // Cosine re-scoring before dedup so semantically better chunks survive
   if (queryEmbedding) {
@@ -105,7 +114,7 @@ export async function hybridSearch(
  * Each result gets score = sum(1 / (K + rank)) across all lists it appears in.
  * After accumulation: normalize to 0-1, then boost compiled_truth chunks.
  */
-export function rrfFusion(lists: SearchResult[][], k: number): SearchResult[] {
+export function rrfFusion(lists: SearchResult[][], k: number, applyBoost = true): SearchResult[] {
   const scores = new Map<string, { result: SearchResult; score: number }>();
 
   for (const list of lists) {
@@ -133,8 +142,8 @@ export function rrfFusion(lists: SearchResult[][], k: number): SearchResult[] {
       const rawScore = e.score;
       e.score = e.score / maxScore;
 
-      // Apply compiled truth boost after normalization
-      const boost = e.result.chunk_source === 'compiled_truth' ? COMPILED_TRUTH_BOOST : 1.0;
+      // Apply compiled truth boost after normalization (skip for detail=high)
+      const boost = applyBoost && e.result.chunk_source === 'compiled_truth' ? COMPILED_TRUTH_BOOST : 1.0;
       e.score *= boost;
 
       if (DEBUG) {
