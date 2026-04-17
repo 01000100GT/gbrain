@@ -66,6 +66,15 @@ export interface MinionJob {
   tokens_output: number;
   tokens_cache_read: number;
 
+  // v7: subagent + parity
+  depth: number;
+  max_children: number | null;
+  timeout_ms: number | null;
+  timeout_at: Date | null;
+  remove_on_complete: boolean;
+  remove_on_fail: boolean;
+  idempotency_key: string | null;
+
   // Results
   result: Record<string, unknown> | null;
   progress: unknown | null;
@@ -93,6 +102,28 @@ export interface MinionJobInput {
   delay?: number; // ms delay before eligible
   parent_job_id?: number;
   on_child_fail?: ChildFailPolicy;
+
+  // v7: subagent + parity
+  /** Cap on live (non-terminal) children of THIS job. NULL/undefined = unlimited. */
+  max_children?: number;
+  /** Wall-clock per-job deadline in ms. Set on claim → timeout_at. Terminal on expire (no retry). */
+  timeout_ms?: number;
+  /** DELETE row on successful completion (after token rollup + child_done insert). */
+  remove_on_complete?: boolean;
+  /** DELETE row on terminal failure (after parent failure hook). */
+  remove_on_fail?: boolean;
+  /** Override the queue's maxSpawnDepth for THIS submission only. */
+  max_spawn_depth?: number;
+  /** Global dedup key. Same key returns the existing job, no second row created. */
+  idempotency_key?: string;
+}
+
+/** Constructor options for MinionQueue (v7). */
+export interface MinionQueueOpts {
+  /** Max parent→child→grandchild depth. Default 5. Enforced on add() with parent_job_id. */
+  maxSpawnDepth?: number;
+  /** Max attachment size in bytes. Default 5 MiB. */
+  maxAttachmentBytes?: number;
 }
 
 export interface MinionWorkerOpts {
@@ -146,6 +177,51 @@ export function rowToInboxMessage(row: Record<string, unknown>): InboxMessage {
     payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
     sent_at: new Date(row.sent_at as string),
     read_at: row.read_at ? new Date(row.read_at as string) : null,
+  };
+}
+
+// --- Child-done inbox message (auto-posted on completeJob) ---
+
+/** Posted into the parent's inbox when a child completes successfully. */
+export interface ChildDoneMessage {
+  type: 'child_done';
+  child_id: number;
+  job_name: string;
+  result: unknown;
+}
+
+// --- Attachments (v7) ---
+
+/** Caller-supplied attachment payload. content is base64-encoded bytes. */
+export interface AttachmentInput {
+  filename: string;
+  content_type: string;
+  /** Base64-encoded file bytes. Validated server-side. */
+  content_base64: string;
+}
+
+/** Persisted attachment row (without inline bytes; use getAttachment to fetch). */
+export interface Attachment {
+  id: number;
+  job_id: number;
+  filename: string;
+  content_type: string;
+  storage_uri: string | null;
+  size_bytes: number;
+  sha256: string;
+  created_at: Date;
+}
+
+export function rowToAttachment(row: Record<string, unknown>): Attachment {
+  return {
+    id: row.id as number,
+    job_id: row.job_id as number,
+    filename: row.filename as string,
+    content_type: row.content_type as string,
+    storage_uri: (row.storage_uri as string) || null,
+    size_bytes: row.size_bytes as number,
+    sha256: row.sha256 as string,
+    created_at: new Date(row.created_at as string),
   };
 }
 
@@ -213,6 +289,13 @@ export function rowToMinionJob(row: Record<string, unknown>): MinionJob {
     tokens_input: (row.tokens_input as number) ?? 0,
     tokens_output: (row.tokens_output as number) ?? 0,
     tokens_cache_read: (row.tokens_cache_read as number) ?? 0,
+    depth: (row.depth as number) ?? 0,
+    max_children: (row.max_children as number) ?? null,
+    timeout_ms: (row.timeout_ms as number) ?? null,
+    timeout_at: row.timeout_at ? new Date(row.timeout_at as string) : null,
+    remove_on_complete: row.remove_on_complete === true,
+    remove_on_fail: row.remove_on_fail === true,
+    idempotency_key: (row.idempotency_key as string) || null,
     result: row.result ? (typeof row.result === 'string' ? JSON.parse(row.result) : row.result) as Record<string, unknown> : null,
     progress: row.progress ? (typeof row.progress === 'string' ? JSON.parse(row.progress) : row.progress) : null,
     error_text: (row.error_text as string) || null,
