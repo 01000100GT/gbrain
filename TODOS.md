@@ -125,6 +125,38 @@
 
 **Depends on:** v0.8.0 (Edge Function removal shipped).
 
+## P2 (knowledge graph follow-ups)
+
+### Auto-link skipped writes generate redundant SQL
+**What:** When `gbrain put` is called with identical content (status=skipped), runAutoLink still does a full getLinks + per-candidate addLink loop. On N identical writes of a 50-entity page that's 50N round trips.
+
+**Why:** Defensive reconciliation catches drift between page text and links table, but on truly idempotent writes it's wasted work.
+
+**Pros:** Lower DB load on cron-style re-syncs. Keeps put_page latency tight under bulk MCP usage.
+
+**Cons:** Need to track whether links could have drifted independent of content (e.g., a target page was deleted). Conservative approach: only skip auto-link reconciliation if status=skipped AND existing links match desired set (which still requires the getLinks call).
+
+**Context:** Caught in /ship adversarial review (2026-04-18). Acceptable for v0.10.3 because auto-link runs in a transaction with row locks, so amplification cost is bounded.
+
+**Effort estimate:** S (CC: ~10min)
+**Priority:** P2
+**Depends on:** Nothing.
+
+### Audit `extract --source db` against auto_link config flag
+**What:** `gbrain extract links --source db` writes to the same `links` table that `auto_link=false` is supposed to opt out of. The two are conceptually distinct (extract is intentional batch op, auto_link is implicit on write), but a user who turned off auto_link expecting "no automatic link writes" might be surprised.
+
+**Why:** Either the behavior should match (extract checks auto_link too) or the docs should explicitly state extract is a superset.
+
+**Pros:** Less surprise for users who treat auto_link as a master switch.
+
+**Cons:** Some users want extract to work even when auto_link is off (e.g. one-time backfill).
+
+**Context:** Caught in /ship adversarial review (2026-04-18). Documenting for now.
+
+**Effort estimate:** S (CC: ~10min for docs OR ~20min for code change).
+**Priority:** P2
+**Depends on:** Nothing.
+
 ## Completed
 
 ### Implement AWS Signature V4 for S3 storage backend

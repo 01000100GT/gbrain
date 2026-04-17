@@ -2,6 +2,40 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.10.3] - 2026-04-18
+
+### Knowledge Graph Layer
+
+Your brain now wires itself. Every page write automatically extracts entity references and creates typed links between pages. The `links` table goes from a manually-populated convention to a real, queryable knowledge graph that compounds over time.
+
+- **Auto-link on every page write.** When you `gbrain put` a page that mentions `[Alice](people/alice)` or `[Acme](companies/acme)`, those links land in the graph automatically. Stale links (refs no longer in the page text) are removed in the same call. Run a quick `gbrain put` and the brain knows who's connected to whom. To opt out: `gbrain config set auto_link false`.
+- **Typed relationships.** Inferred from context using deterministic regex (zero LLM calls): `attended` (meeting -> person), `works_at` (CEO of, VP at, joined as), `invested_in` (invested in, backed by), `founded` (founded, co-founded), `advises` (advises, board member), `source` (frontmatter), `mentions` (default). On a 80-page benchmark brain: 94% type accuracy.
+- **`gbrain extract --source db`.** New mode for the existing `gbrain extract <links|timeline|all>` command that walks pages from the engine instead of from disk. Works for live brains backed by Postgres or PGLite without a local markdown checkout — exactly what an MCP-driven Wintermute or OpenClaw setup needs. Filesystem mode (`--source fs`) is unchanged and still the default.
+- **`gbrain graph-query <slug>` for relationship traversal.** "Who works at Acme?" → `gbrain graph-query companies/acme --type works_at --direction in`. "Who attended meetings with Alice?" → `gbrain graph-query people/alice --type attended --depth 2`. Returns typed edges with depth, not just nodes. Backed by a new `traversePaths()` engine method on both PGLite and Postgres with cycle prevention (no exponential blowup on cyclic subgraphs).
+- **Graph-powered search ranking.** Hybrid search now applies a small backlink boost after cosine re-scoring (`score *= 1 + 0.05 * log(1 + backlink_count)`). Well-connected entities surface higher in results. Works in both keyword-only and full hybrid paths. Tested on the new `test/benchmark-graph-quality.ts` (80 pages, 35 queries, A/B/C comparison) — relational query recall jumps from ~30% (search alone) to 100% (graph traversal).
+- **Graph health metrics in `gbrain health`.** New `link_coverage` and `timeline_coverage` percentages on entity pages (person/company), plus `most_connected` top-5 list. The `dead_links` field is dropped (always 0 under ON DELETE CASCADE — was a phantom metric). The `brain_score` composite formula stays but now reflects a sharper graph signal.
+
+### Schema migrations
+
+Three new migrations apply automatically on `gbrain init`:
+
+- **v5** widens the `links` UNIQUE constraint to `(from, to, link_type)`. The same person can now both `works_at` AND `advises` the same company as separate rows, instead of one type clobbering the other.
+- **v6** adds a UNIQUE index on `timeline_entries(page_id, date, summary)` plus `ON CONFLICT DO NOTHING` in `addTimelineEntry`. Idempotent inserts at the DB level — running `gbrain extract timeline --source db` twice is safe.
+- **v7** drops the `trg_timeline_search_vector` trigger that updated `pages.updated_at` on every timeline insert. Structured timeline entries are now graph data only, not search text. The markdown timeline section in `pages.timeline` still feeds search via the pages trigger. Side benefit: extraction pagination is no longer self-invalidating.
+
+### Security hardening (caught during pre-ship review)
+
+- **`traverse_graph` MCP depth is hard-capped at 10.** Without this, a remote MCP caller could pass `depth=1e6` and burn database memory/CPU on the recursive CTE.
+- **Auto-link is disabled for remote MCP callers** (`ctx.remote=true`). Bare-slug regex matches `people/X` anywhere in page text including code fences and quoted strings. Without this gate, an untrusted MCP caller could plant arbitrary outbound links by writing pages with intentional slug references; combined with the new backlink boost, attacker-placed targets would surface higher in search.
+- **`runAutoLink` reconciliation runs inside a transaction.** Without it, two concurrent `put_page` calls on the same slug would race: each reads stale `existingKeys` and recreates links the other side just removed.
+- **`--since` validates date format upfront.** Invalid dates (`--since yesterday`) used to silently no-op the filter and reprocess the whole brain. Now: hard error with a clear message.
+
+### Tests
+
+- 1151 unit tests pass (was 891 → +260 new)
+- 105 E2E tests pass against PostgreSQL
+- New `test/benchmark-graph-quality.ts` runs the 80-page A/B/C comparison and gates on real thresholds (link_recall > 90%, type_accuracy > 80%, idempotency true). Currently passing all 9 thresholds.
+
 ## [0.10.2] - 2026-04-17
 
 ### Security — Wave 3 (9 vulnerabilities closed)
