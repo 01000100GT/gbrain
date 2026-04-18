@@ -160,81 +160,46 @@ The system gets smarter on its own. Entity enrichment auto-escalates: a person m
 > "What have I said about the relationship between shame and founder performance?"
 > ... searches YOUR thinking, not the internet
 
-## Minions: background jobs your agent won't drop
+## Minions: your sub-agents won't drop work anymore
 
-If you run multi-agent work on OpenClaw (or any agent platform with subagents), you already know the six daily pains:
+A durable, Postgres-native job queue built into the brain. Every long-running agent task is now a job that survives gateway restarts, streams progress, gets paused / resumed / steered mid-flight, and shows up in `gbrain jobs list`. Zero infra beyond your existing brain.
 
-1. **Spawn storms.** Your orchestrator fans out 20 parallel sub-agents. 18 of them hit the OpenAI rate limit at the same second. Half the run is wasted.
-2. **Agent stops responding.** A sub-agent hangs on a long handler. No wall clock. No timeout. You come back 40 minutes later and it's still "thinking."
-3. **Orchestrator forgets dispatches.** Parent fired off 10 children, then its own context got compacted. Now it doesn't know they're running. They finish, nobody reads the results, the work evaporates.
-4. **Debugging is 10x harder.** Which sub-agent errored? When? What was its parent? The gateway logs are a soup of interleaved lines with no parent-child structure.
-5. **Gateway crash mid-dispatch.** Your orchestrator submits 5 children, then the process dies. Children are orphaned. Parent never recovers. You restart and lose the whole run.
-6. **Runaway grandchildren.** You cancel the parent. Children see the cancel. Grandchildren keep running. Tokens keep burning. You find out from the billing dashboard.
+### The production numbers that matter
 
-Minions fixes all six. It's a durable, Postgres-native job queue built into GBrain. Ships enabled on every `gbrain init`.
+Here's my personal OpenClaw deployment: one Render container. Supabase Postgres holding a 45,000-page brain. 19 cron jobs firing on schedule. The X Enterprise API on the wire. Real gateway load from real daily work. The task: pull a full month of my tweets and ingest them end-to-end into the brain as a structured page.
 
-### Production numbers — real deployment, not a lab
+|              | Minions   | `sessions_spawn`               |
+|---           |---        |---                             |
+| Wall time    | **753ms** | **>10,000ms** (gateway timeout) |
+| Token cost   | **$0.00** | ~$0.03 per run                 |
+| Success rate | **100%**  | **0%** (couldn't even spawn)   |
+| Memory/job   | ~2 MB     | ~80 MB                         |
 
-On Wintermute (Render container, Supabase Postgres, 45K-page brain, 19 active cron jobs, X Enterprise API), pulling one month of tweets end-to-end:
+Under that 19-cron load, sub-agent spawn couldn't clear the 10-second gateway wall. Minions landed it in under a second for zero tokens. **Scaling:** 19,240 tweets across 36 months, single bash loop, ~15 min total, $0.00. Sub-agents: ~9 min best case, ~$1.08 in tokens, ~40% spawn failure. **Lab:** durability ∞ (SIGKILL mid-flight, 10/10 rescued), throughput ~10× faster, fan-out ~21× with no failure wall, memory ~400× less.
 
-| Metric | Minions | OpenClaw `sessions_spawn` |
-|---|---|---|
-| **Wall time** | **753ms** | **>10,000ms (gateway timeout)** |
-| **Token cost** | **$0.00** | ~$0.03 per run |
-| **Success rate** | **100%** | **0% (timeout on first attempt)** |
-| **Memory per in-flight job** | ~2 MB | ~80 MB |
-
-The sub-agent couldn't even spawn. Under a 19-cron production load, the gateway's backlog pushes sub-agent spawn past the 10-second timeout wall.
-
-**Scaling story:** we pulled **19,240 tweets across 36 months (2021-2023)** via Minions in a single bash loop. Total: ~15 minutes, $0.00. The same task via sub-agents would be ~9 minutes best case, ~$1.08 in tokens, and ~40% of spawns would fail under load.
-
-Full write-up: [`docs/benchmarks/2026-04-18-minions-vs-openclaw-production.md`](docs/benchmarks/2026-04-18-minions-vs-openclaw-production.md).
-
-### Lab numbers (controlled environment)
-
-Same LLM (`claude-haiku-4-5`), same prompt, same laptop. Delta is what the queue saves you.
-
-| Axis | Minions | OpenClaw `--local` | Delta |
-|---|---|---|---|
-| **Durability** (10 jobs, orchestrator SIGKILLed mid-flight) | 10/10 rescued in 458ms | 0/10 delivered | ∞ |
-| **Throughput** (20 serial dispatches, p50 per-dispatch) | 778ms | 8086ms | **~10× faster** |
-| **Fan-out** (3 runs × 10 children in parallel, mean wall time) | 1090ms, 30/30 complete | 22598ms, 17/30 complete (43% failure) | **~21× faster, no failure wall** |
-| **Memory** (10 subagents in flight) | 86 MB RSS (1 process) | 814 MB summed (10 processes) | **~400× less** |
-
-Full methodology: [`docs/benchmarks/2026-04-18-minions-vs-openclaw-subagents.md`](docs/benchmarks/2026-04-18-minions-vs-openclaw-subagents.md).
+Full benchmarks: [production](docs/benchmarks/2026-04-18-minions-vs-openclaw-production.md) and [lab](docs/benchmarks/2026-04-18-minions-vs-openclaw-subagents.md).
 
 ### The routing rule
-
-Minions isn't "better subagents." It's a different tool for a different class of work.
 
 > **Deterministic** (same input → same steps → same output) → **Minions**
 > **Judgment** (input requires assessment or decision) → **Sub-agents**
 
-Pull tweets, parse JSON, write a brain page, run a sync — deterministic. Minions. Triage an email inbox, assess meeting priority, decide if a cold email is worth replying to — judgment. Sub-agents. `minion_mode: pain_triggered` (the default) uses that rule automatically.
+Pull tweets, parse JSON, write a brain page, run a sync — deterministic. $0 tokens, survives restart, millisecond runtime. Triage the inbox, assess meeting priority, decide if a cold email deserves a reply — judgment. What sub-agents are actually good at. `minion_mode: pain_triggered` (the default) automates the routing.
 
-### How each pain gets fixed
+### What's fixed
 
-| Pain | How Minions fixes it |
-|---|---|
-| Spawn storms | `max_children` cap per parent, enforced with `SELECT ... FOR UPDATE` so concurrent submits can't both slip past |
-| Agent stops responding | `timeout_ms` per job, DB-enforced dead-letter + cooperative AbortSignal safety net |
-| Forgotten dispatches | `child_done` message posted to parent's inbox in the same transaction as token rollup. `readChildCompletions(parent)` for fan-in |
-| Debugging | Every job has `parent_job_id`, `depth`, full attempt history, structured progress, a transcript. `gbrain jobs get <id>` shows everything |
-| Gateway crash | Jobs live in Postgres. Worker restarts, stall detection re-claims orphaned jobs, state survives |
-| Runaway grandchildren | `cancelJob()` walks the descendant tree in a single recursive CTE. Whole subtree cancels atomically |
-
-Plus idempotency keys (same key = same job, PG unique index enforces it), attachments with path traversal and size validation, `removeOnComplete` so the table doesn't bloat, and a smoke test (`gbrain jobs smoke`) that proves the whole thing works in half a second.
+The six daily pains — spawn storms, agents that stop responding, forgotten dispatches, gateway crashes mid-run, runaway grandchildren, debugging soup — all belonged to the "deterministic work through a reasoning model" mistake. Minions fixes them by not making that mistake: `max_children` cap, `timeout_ms` + AbortSignal, `child_done` inbox, full `parent_job_id`/`depth`/transcript per job, Postgres durability with stall detection, cascade cancel via recursive CTE. Plus idempotency keys, attachment validation, `removeOnComplete`, and `gbrain jobs smoke` that proves the install in half a second.
 
 ```bash
 gbrain jobs smoke                        # verify install
 gbrain jobs submit sync --params '{}'    # fire a background job
 gbrain jobs stats                        # health dashboard
-gbrain jobs work --concurrency 4         # start a worker daemon (Postgres only)
+gbrain jobs work --concurrency 4         # start a worker (Postgres only)
 ```
 
-**Adoption is pain-triggered by default.** Fresh installs keep native subagents for most work. When the gateway drops state or the user says "why is this so flaky," your agent offers to route that task to Minions instead. Flip to always-on with `gbrain config set minion_mode always`.
+Read [`skills/minion-orchestrator/SKILL.md`](skills/minion-orchestrator/SKILL.md) for parent-child DAGs, fan-in collection, steering via inbox.
 
-Read `skills/minion-orchestrator/SKILL.md` for the full orchestration patterns (parent-child DAGs, fan-in collection, steering via inbox).
+**Minions is not incrementally better than sub-agents for background work. It's categorically different.** 753ms vs gateway timeout. $0 vs tokens. 100% vs couldn't-spawn. If your agent does deterministic work on a schedule, it runs on Minions now.
 
 ### Health check and self-heal
 
