@@ -2,6 +2,82 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.15.0] - 2026-04-20
+
+## **Durable agents land. Your LLM loops survive crashes, sleeps, and worker restarts now.**
+## **Laptop closed mid-run? Come back, resume where it died.**
+
+Wintermute crashes daily. Not "sometimes." Daily. An 8-turn OpenClaw subagent fires a tool call, the worker dies on a memory blip, all eight turns of context are gone, and there's nothing to do but start over from turn zero. This release kills that. `gbrain agent run` submits an Anthropic Messages API conversation as a first-class Minion job: every turn persists to `subagent_messages`, every tool call is a two-phase ledger row (`pending` → `complete | failed`), and replay on worker restart picks up from exactly the last committed turn. Crash-safe by construction, not by hope.
+
+Fan-out works the same way. `--fanout-manifest` splits N prompts across N subagent children plus one aggregator. Children run `on_child_fail: 'continue'` so one failing run doesn't cascade, and the aggregator claims after all children reach ANY terminal state (complete, failed, dead, cancelled, timeout) and writes a mixed-outcome summary. No polling loop, no dead parents stranded in `waiting-children`.
+
+Plugins work. Host repos drop a `gbrain.plugin.json` + `subagents/*.md` dir somewhere on `GBRAIN_PLUGIN_PATH`, and their custom subagent defs load at worker startup. Wintermute ships its meeting-ingestion, signal-detector, and daily-task-prep subagents in its own repo now; gbrain discovers them day one. Collision rule is deterministic (left-wins with a loud warning). Trust boundary is strict on purpose: plugins ship DEFS, not tools. Tool allow-list stays here.
+
+### The numbers that matter
+
+Measured on the v0.15 branch against real Postgres via `bun run test:e2e`, plus the 159 new unit tests across 10 new test files. Coverage: 12 new runtime modules, 53+ code paths + user flows traced, 3 critical regression tests for the shell-jobs queue surface.
+
+| Metric                                                   | BEFORE v0.15                       | AFTER v0.15                                 | Δ                                    |
+|----------------------------------------------------------|------------------------------------|---------------------------------------------|--------------------------------------|
+| Wintermute run survives worker kill mid-tool-call        | No (start over)                    | Yes (resume from last committed turn)        | crash-recovery unlocked              |
+| Fan-out run with 1 failed child out of N                 | Aggregator fails                   | Aggregator still claims + summarizes         | mixed-outcome aggregation works      |
+| `gbrain agent logs --follow` during long Anthropic call  | Silent (looks frozen)              | Heartbeat line per turn boundary              | visible progress                     |
+| Tool-use replay on resume                                 | N/A (no resume)                    | Idempotent re-run, non-idempotent aborts      | two-phase protocol                   |
+| `put_page` exposure to agent-driven writes               | Full write surface                 | Namespace-scoped `wiki/agents/<id>/…`         | fail-closed, server-enforced         |
+| Plugin subagent defs for downstream hosts                | Not supported                      | `GBRAIN_PLUGIN_PATH` + validated at startup   | Wintermute day-1 usable              |
+| Rate-lease capacity leaks on worker crash                 | Counter-based (leaks)              | Lease-based (auto-prune on next acquire)      | no starvation after SIGKILL          |
+| Anthropic prompt cache on 40-turn agent                   | Per-turn cold                      | `cache_control: ephemeral` on system + tools  | ~10x cost reduction (best-case)      |
+
+### What this means for Wintermute
+
+You stop rerunning from zero. A crash at 3am that used to lose two hours of turns now costs you whatever fraction of one turn was in-flight when the worker died. The rest of the conversation is rows in `subagent_messages` and `subagent_tool_executions`, and the next worker claim replays from there. `gbrain agent logs <job>` shows you where it died, which tool it was running, and what came back from the last successful call. Real debugging, not guessing.
+
+Credit: shell-jobs (v0.14) established every pattern v0.15 reuses — handler signature, dual-signal abort, ctx.updateTokens, protected-names, trusted-submit, JSONL audit log, timeout_ms. Codex caught the Mode A "transparent Agent() interception" impossibility during plan review and saved the shape of this work. The v0.15 handler is what survives on the other side of that review.
+
+### Itemized changes
+
+**New capability: `gbrain agent` CLI**
+- `gbrain agent run <prompt> [--subagent-def|--model|--max-turns|--tools|--timeout-ms|--fanout-manifest|--follow|--detach]` — submits a subagent job (or fan-out of N subagents + aggregator) under the trusted-submit flag. Follow mode tails status + logs until terminal; detach prints the job id and exits. Ctrl-C detaches (job keeps running), does not cancel.
+- `gbrain agent logs <job_id> [--follow] [--since ISO-or-relative]` — merges the JSONL heartbeat audit with persisted `subagent_messages` into one chronological timeline. `--since 5m` / `1h` / `2d` shorthand supported. Transcript tail renders the full message + tool tree only after the job is terminal.
+- Gated by `GBRAIN_ALLOW_LLM_JOBS=1` on the worker, matching the shell-jobs opt-in shape. Submitted jobs sit in `waiting` until a qualified worker claims them.
+
+**New durability primitives**
+- `src/core/minions/handlers/subagent.ts` — the LLM-loop handler. Two-phase tool persistence, replay reconciliation for mid-dispatch crashes, dual-signal abort (`ctx.signal` + `ctx.shutdownSignal`), Anthropic prompt caching on system + tool defs, injectable `MessagesClient` for mocking.
+- `src/core/minions/handlers/subagent-aggregator.ts` — claims AFTER all children resolve (Lane 1B's queue changes guarantee each terminal child posts a `child_done` inbox message), produces deterministic mixed-outcome markdown summary.
+- `src/core/minions/rate-leases.ts` — lease-based concurrency cap for outbound providers. Owner-tagged rows with `expires_at` auto-prune on acquire, so a crashed worker can't strand capacity. `pg_advisory_xact_lock` guards the check-then-insert.
+- `src/core/minions/wait-for-completion.ts` — poll-until-terminal helper for CLI callers. `TimeoutError` does NOT cancel the job; AbortSignal exits cleanly. Default `pollMs`: 1000 on Postgres, 250 on PGLite inline.
+- `src/core/minions/handlers/subagent-audit.ts` — JSONL audit + heartbeat writer. Rotates weekly via ISO week. `readSubagentAuditForJob` is the readback path for `gbrain agent logs`.
+- `src/core/minions/transcript.ts` — messages + tool executions → markdown renderer. UTF-8-safe truncation; unknown block types fall through to JSON for diagnostics.
+- `src/core/minions/tools/brain-allowlist.ts` — derives the subagent tool registry from `src/core/operations.ts`. 11-name allow-list (read-only + deterministic `put_page`). `put_page` schema is namespace-wrapped per subagent so the model writes correct slugs first-try; the server-side check in `put_page` is the authoritative gate.
+- `src/core/minions/plugin-loader.ts` — `GBRAIN_PLUGIN_PATH` (colon-separated absolute paths like `PATH`) + `gbrain.plugin.json` manifest + `subagents/*.md` defs. Strict path policy, left-wins collision, plugins ship DEFS only (no new tools), `allowed_tools:` validated at load time.
+- `src/mcp/tool-defs.ts` — extracted from an inline `operations.map(...)` block in the MCP server so subagent + MCP use the same source of truth. Byte-for-byte equivalence pinned by regression test.
+
+**Schema (3 new tables + OperationContext fields + migration orchestrator)**
+- `subagent_messages` — Anthropic message-block persistence. `(job_id, message_idx)` UNIQUE; `content_blocks JSONB` holds parallel tool_use blocks in one assistant message.
+- `subagent_tool_executions` — two-phase ledger. `(job_id, tool_use_id)` UNIQUE; status: `pending | complete | failed`.
+- `subagent_rate_leases` — lease-based concurrency control. CASCADE deletes on owning job removal so no leaked rows.
+- `OperationContext` gains `jobId?`, `subagentId?`, and `viaSubagent?` (fail-closed signal for agent-path gating). Added to `src/core/operations.ts`.
+- `src/commands/migrations/v0_15_0.ts` — post-upgrade orchestrator (phases: schema → verify → record). `v0_14_0.ts` noop stub keeps the registry version sequence gapless.
+
+**Queue correctness fixes**
+- `failJob`, `cancelJob`, and `handleTimeouts` all emit `child_done` inbox messages with `outcome: 'complete' | 'failed' | 'dead' | 'cancelled' | 'timeout'`. Pre-v0.15 only `completeJob` emitted; failed/cancelled/timed-out children silently stranded aggregator-style parents.
+- Parent-resolution terminal set expanded from `{completed, dead, cancelled}` to include `'failed'` everywhere parent-state is checked. A failed child with `on_child_fail: 'continue'` now correctly unblocks the parent.
+- `failJob` emits `child_done` BEFORE the parent-terminal UPDATE. Without insertion ordering, the EXISTS guard on the inbox INSERT would skip the row on `fail_parent` paths (caught by codex iteration 3).
+- `MinionJobInput.max_stalled` threads through `MinionQueue.add()` as INSERT param (not UPDATE on idempotency replay — that would mutate first-submitter state).
+
+**Trust model**
+- `subagent` and `subagent_aggregator` join `PROTECTED_JOB_NAMES`. MCP `submit_job` returns `permission_denied`; only `gbrain agent run` (with `allowProtectedSubmit`) can insert these rows.
+- `put_page` gains a server-side fail-closed namespace check: when `ctx.viaSubagent === true`, `slug` MUST match `^wiki/agents/<subagentId>/.+` — even if `subagentId` is undefined (dispatcher bug must not open a hole).
+
+**Docs**
+- `docs/guides/plugin-authors.md` — Wintermute-facing walkthrough (minimum viable plugin, path + collision + trust policies, frontmatter fields, caveats).
+- 12 bisectable commits on `garrytan/minions-seam`, each PR-worthy on its own; the full series lands v0.15.0 end-to-end.
+
+**Tests**
+- 159 new unit tests across 10 new files: `mcp-tool-defs`, `put-page-namespace`, `migrations-v0_15_0`, `queue-child-done`, `rate-leases`, `wait-for-completion`, `brain-allowlist`, `subagent-audit`, `subagent-transcript`, `subagent-handler`, `subagent-aggregator`, `plugin-loader`, `agent-cli`.
+- 3 critical regression tests pin the shell-jobs queue surface: `failJob` child_done behavior, `put_page` namespace path for non-subagent callers, MCP `buildToolDefs` byte-equivalence.
+- E2E `minions-resilience.test.ts` updated: the max_children test renames its spawned children off the now-protected `subagent` name.
+
 ## [0.14.0] - 2026-04-20
 
 ## **Move gateway crons to Minions. Zero LLM tokens per cron fire.**
