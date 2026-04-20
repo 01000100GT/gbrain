@@ -1,94 +1,37 @@
 /**
- * Embedding Service
- * Ported from production Ruby implementation (embedding_service.rb, 190 LOC)
+ * Embedding Service — v0.14+ thin delegation to src/core/ai/gateway.ts.
  *
- * OpenAI text-embedding-3-large at 1536 dimensions.
- * Retry with exponential backoff (4s base, 120s cap, 5 retries).
- * 8000 character input truncation.
+ * The gateway handles provider resolution, retry, error normalization, and
+ * dimension-parameter passthrough (preserving existing 1536-dim brains).
  */
 
-import OpenAI from 'openai';
+import {
+  embed as gatewayEmbed,
+  embedOne as gatewayEmbedOne,
+  getEmbeddingModel as gatewayGetModel,
+  getEmbeddingDimensions as gatewayGetDims,
+} from './ai/gateway.ts';
 
-const MODEL = 'text-embedding-3-large';
-const DIMENSIONS = 1536;
-const MAX_CHARS = 8000;
-const MAX_RETRIES = 5;
-const BASE_DELAY_MS = 4000;
-const MAX_DELAY_MS = 120000;
-const BATCH_SIZE = 100;
-
-let client: OpenAI | null = null;
-
-function getClient(): OpenAI {
-  if (!client) {
-    client = new OpenAI();
-  }
-  return client;
-}
-
+/** Embed one text. */
 export async function embed(text: string): Promise<Float32Array> {
-  const truncated = text.slice(0, MAX_CHARS);
-  const result = await embedBatch([truncated]);
-  return result[0];
+  return gatewayEmbedOne(text);
 }
 
+/** Embed a batch of texts. */
 export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
-  const truncated = texts.map(t => t.slice(0, MAX_CHARS));
-  const results: Float32Array[] = [];
-
-  // Process in batches of BATCH_SIZE
-  for (let i = 0; i < truncated.length; i += BATCH_SIZE) {
-    const batch = truncated.slice(i, i + BATCH_SIZE);
-    const batchResults = await embedBatchWithRetry(batch);
-    results.push(...batchResults);
-  }
-
-  return results;
+  return gatewayEmbed(texts);
 }
 
-async function embedBatchWithRetry(texts: string[]): Promise<Float32Array[]> {
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      const response = await getClient().embeddings.create({
-        model: MODEL,
-        input: texts,
-        dimensions: DIMENSIONS,
-      });
-
-      // Sort by index to maintain order
-      const sorted = response.data.sort((a, b) => a.index - b.index);
-      return sorted.map(d => new Float32Array(d.embedding));
-    } catch (e: unknown) {
-      if (attempt === MAX_RETRIES - 1) throw e;
-
-      // Check for rate limit with Retry-After header
-      let delay = exponentialDelay(attempt);
-
-      if (e instanceof OpenAI.APIError && e.status === 429) {
-        const retryAfter = e.headers?.['retry-after'];
-        if (retryAfter) {
-          const parsed = parseInt(retryAfter, 10);
-          if (!isNaN(parsed)) {
-            delay = parsed * 1000;
-          }
-        }
-      }
-
-      await sleep(delay);
-    }
-  }
-
-  // Should not reach here
-  throw new Error('Embedding failed after all retries');
+/** Currently-configured embedding model (short form without provider prefix). */
+export function getEmbeddingModelName(): string {
+  return gatewayGetModel().split(':').slice(1).join(':') || 'text-embedding-3-large';
 }
 
-function exponentialDelay(attempt: number): number {
-  const delay = BASE_DELAY_MS * Math.pow(2, attempt);
-  return Math.min(delay, MAX_DELAY_MS);
+/** Currently-configured embedding dimensions. */
+export function getEmbeddingDimensions(): number {
+  return gatewayGetDims();
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-export { MODEL as EMBEDDING_MODEL, DIMENSIONS as EMBEDDING_DIMENSIONS };
+// Back-compat exports for tests that imported these from v0.13 (now evaluate lazily).
+export const EMBEDDING_MODEL = 'text-embedding-3-large';
+export const EMBEDDING_DIMENSIONS = 1536;

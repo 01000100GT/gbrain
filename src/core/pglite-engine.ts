@@ -5,7 +5,7 @@ import type { Transaction } from '@electric-sql/pglite';
 import type { BrainEngine, LinkBatchInput, TimelineBatchInput } from './engine.ts';
 import { MAX_SEARCH_LIMIT, clampSearchLimit } from './engine.ts';
 import { runMigrations } from './migrate.ts';
-import { PGLITE_SCHEMA_SQL } from './pglite-schema.ts';
+import { PGLITE_SCHEMA_SQL, getPGLiteSchema } from './pglite-schema.ts';
 import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
 import type {
   Page, PageInput, PageFilters, PageType,
@@ -61,7 +61,16 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async initSchema(): Promise<void> {
-    await this.db.exec(PGLITE_SCHEMA_SQL);
+    // Resolve embedding dim/model from gateway (v0.14+). Defaults preserve v0.13.
+    let dims = 1536;
+    let model = 'text-embedding-3-large';
+    try {
+      const gw = await import('./ai/gateway.ts');
+      dims = gw.getEmbeddingDimensions();
+      model = gw.getEmbeddingModel().split(':').slice(1).join(':') || model;
+    } catch { /* gateway not configured — use defaults */ }
+
+    await this.db.exec(getPGLiteSchema(dims, model));
 
     const { applied } = await runMigrations(this);
     if (applied > 0) {

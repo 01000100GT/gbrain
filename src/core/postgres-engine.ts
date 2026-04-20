@@ -58,11 +58,25 @@ export class PostgresEngine implements BrainEngine {
 
   async initSchema(): Promise<void> {
     const conn = this.sql;
+    // Resolve the embedding dim/model from the gateway (v0.14+).
+    // Falls back to v0.13 defaults (1536d + text-embedding-3-large) when gateway isn't configured yet.
+    let dims = 1536;
+    let model = 'text-embedding-3-large';
+    try {
+      const gw = await import('./ai/gateway.ts');
+      dims = gw.getEmbeddingDimensions();
+      model = gw.getEmbeddingModel().split(':').slice(1).join(':') || model;
+    } catch { /* gateway not yet configured — use defaults */ }
+
+    const sql = SCHEMA_SQL
+      .replace(/vector\(1536\)/g, `vector(${dims})`)
+      .replace(/'text-embedding-3-large'/g, `'${model}'`);
+
     // Advisory lock prevents concurrent initSchema() calls from deadlocking
     // on DDL statements (DROP TRIGGER + CREATE TRIGGER acquire AccessExclusiveLock)
     await conn`SELECT pg_advisory_lock(42)`;
     try {
-      await conn.unsafe(SCHEMA_SQL);
+      await conn.unsafe(sql);
 
       // Run any pending migrations automatically
       const { applied } = await runMigrations(this);
