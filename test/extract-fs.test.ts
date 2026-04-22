@@ -32,7 +32,7 @@ beforeAll(async () => {
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
-});
+}, 30_000);
 
 afterAll(async () => {
   await engine.disconnect();
