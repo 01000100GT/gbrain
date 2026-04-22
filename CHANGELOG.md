@@ -2,14 +2,14 @@
 
 All notable changes to GBrain will be documented in this file.
 
-## [0.18.0] - 2026-04-22
+## [0.18.1] - 2026-04-22
 
 ## **`gbrain doctor` now enforces Row Level Security on every public table.**
 ## **Ten gbrain-managed tables that shipped without RLS are fixed in the base schema and backfilled for existing brains.**
 
-PR #336 started as "widen the doctor RLS check to scan all public tables instead of a hardcoded 10-table list." Once we actually looked, it turned out `gbrain` itself had been quietly shipping 10 public tables without RLS for months: `access_tokens`, `mcp_request_log`, `minion_inbox`, `minion_attachments`, `subagent_messages`, `subagent_tool_executions`, `subagent_rate_leases`, `gbrain_cycle_locks`, `budget_ledger`, `budget_reservations`. On Supabase, every one of those was reachable by the anon key. `access_tokens` and the subagent conversation history tables are the ones that stand out.
+A follow-up to v0.18.0 that closes a latent security gap the multi-source work didn't touch. `gbrain` itself had been quietly shipping 10 public tables without RLS for months: `access_tokens`, `mcp_request_log`, `minion_inbox`, `minion_attachments`, `subagent_messages`, `subagent_tool_executions`, `subagent_rate_leases`, `gbrain_cycle_locks`, `budget_ledger`, `budget_reservations`. On Supabase, every one of those was reachable by the anon key. `access_tokens` and the subagent conversation history tables are the ones that stand out.
 
-This release closes the gap on three fronts at once: the check gets widened (so future misses surface), the base schema gets the missing 10 `ENABLE RLS` statements (so fresh installs are secure), and a new schema migration (v17 `rls_backfill_missing_tables`) enables RLS on existing brains automatically when `gbrain doctor` or `gbrain apply-migrations` runs.
+This release closes the gap on three fronts at once: the check gets widened (so future misses surface), the base schema gets the missing 8 `ENABLE RLS` statements for tables it tracks (so fresh installs are secure), and new schema migration v24 `rls_backfill_missing_tables` enables RLS on all 10 of the affected tables in existing brains automatically when `gbrain doctor` or `gbrain apply-migrations` runs. The sources + file_migration_ledger tables introduced in v0.18.0 already had RLS from day one.
 
 The severity also upgrades from `warn` to `fail`. Missing RLS is a security issue, not a suggestion. `gbrain doctor` will exit 1 when any public table is missing RLS. If you wrap `gbrain doctor` in a cron or CI health check, expect it to turn red if anything is still open.
 
@@ -17,12 +17,13 @@ There is an escape hatch for tables you deliberately want readable by the anon k
 
 ### The numbers that matter
 
-Measured against the v0.17 schema + doctor check.
+Measured against v0.18.0.
 
-| Metric | BEFORE v0.18 | AFTER v0.18 | Δ |
-|--------|--------------|-------------|---|
+| Metric | BEFORE v0.18.1 | AFTER v0.18.1 | Δ |
+|--------|----------------|---------------|---|
 | Tables in `public` covered by the doctor RLS check | 10 (hardcoded list) | all (every `pg_tables` row) | +100% coverage |
-| gbrain-managed public tables with RLS enabled on fresh install | 11 of 21 | 21 of 21 | +10 tables |
+| gbrain-managed public tables with RLS on fresh install | 13 of 21 | 21 of 21 | +8 in schema |
+| Tables backfilled by migration v24 on existing brains | 0 | 10 | budget_ledger + budget_reservations covered too |
 | `gbrain doctor` severity for missing RLS | warn (exit 0) | fail (exit 1) | breaking |
 | Escape hatch for intentional anon-readable tables | None (silent misses) | `GBRAIN:RLS_EXEMPT reason=...` pg comment | new capability |
 | Identifier-safe remediation SQL (hyphens, reserved words) | No (`ALTER TABLE public.<name>`) | Yes (`ALTER TABLE "public"."<name>"`) | correctness |
@@ -31,17 +32,17 @@ Measured against the v0.17 schema + doctor check.
 
 ### What this means for your workflow
 
-Existing Supabase brains: run `gbrain doctor` after upgrading. The backfill migration runs automatically on the next `initSchema()` (which every gbrain connection does on startup), so by the time doctor runs you're clean. If doctor still fails, the message names the table and gives you the exact `ALTER TABLE` line.
+Existing Supabase brains: run `gbrain doctor` after upgrading. Migration v24 runs automatically on the next `initSchema()` (which every gbrain connection does on startup), so by the time doctor runs you're clean. If doctor still fails, the message names the table and gives you the exact `ALTER TABLE` line.
 
 PGLite brains (the `gbrain init` default): nothing to do. RLS is irrelevant on embedded Postgres. Doctor skips the check with an explicit message.
 
 Cron and CI wrappers: audit them. The exit-code flip is the one breaking change in this release. If your wrapper pages on exit-1, that's correct behavior now. If you need a softer signal for a specific table that you've decided is anon-readable on purpose, use the GBRAIN:RLS_EXEMPT comment escape hatch. Don't silence the whole check.
 
-Credit: Garry's OpenClaw for the original PR widening the check. Codex found the schema gap during plan review.
+Credit: Garry's OpenClaw for the original PR widening the check (#336). Codex found the schema gap during plan review.
 
-## To take advantage of v0.18.0
+## To take advantage of v0.18.1
 
-`gbrain upgrade` should do this automatically. The schema migration runs on the next
+`gbrain upgrade` should do this automatically. Migration v24 runs on the next
 `initSchema()` call, which happens on every CLI or long-running command startup. If
 `gbrain doctor` warns about a partial migration or still reports missing RLS:
 
@@ -68,20 +69,125 @@ Credit: Garry's OpenClaw for the original PR widening the check. Codex found the
    - contents of `~/.gbrain/upgrade-errors.jsonl` if it exists
    - which step broke
 
+   This feedback loop is how the gbrain maintainers find fragile upgrade paths. Thank you.
+
 ### Itemized changes
 
-- **Schema fix (fresh installs):** `src/schema.sql` now enables RLS on all 21 public tables in the base schema (11 before, +10 new: `access_tokens`, `mcp_request_log`, `minion_inbox`, `minion_attachments`, `subagent_messages`, `subagent_tool_executions`, `subagent_rate_leases`, `gbrain_cycle_locks`, `budget_ledger`, `budget_reservations`). `budget_ledger` + `budget_reservations` were previously migration-only (v12); promoted to the base schema so fresh installs pick up RLS from the standard gate. `src/core/schema-embedded.ts` regenerated.
-- **Schema migration (existing installs):** New migration `v17 rls_backfill_missing_tables` in `src/core/migrate.ts` enables RLS on all 10 tables idempotently. Gated on `rolbypassrls` — if the current role does not hold BYPASSRLS, the migration raises a warning and skips, matching the pattern used by the base schema's RLS block.
-- **Doctor check widened:** `src/commands/doctor.ts` RLS check now scans every public table from `pg_tables`, not a hardcoded 10-name allowlist. Severity upgraded `warn → fail`. Success message shows table count (`RLS enabled on 19/19 public tables`). Failure message includes per-table quoted `ALTER TABLE "public"."<name>" ENABLE ROW LEVEL SECURITY;` remediation SQL.
+- **Schema fix (fresh installs):** `src/schema.sql` now enables RLS on all 21 public tables in the base schema (13 before v0.18.1, +8 added here: `access_tokens`, `mcp_request_log`, `minion_inbox`, `minion_attachments`, `subagent_messages`, `subagent_tool_executions`, `subagent_rate_leases`, `gbrain_cycle_locks`). `src/core/schema-embedded.ts` regenerated.
+- **Schema migration (existing installs):** New migration `v24 rls_backfill_missing_tables` in `src/core/migrate.ts` enables RLS on all 10 affected tables idempotently (the 8 above plus `budget_ledger` and `budget_reservations`, which remain migration-only per v12). Gated on `rolbypassrls` — if the current role does not hold BYPASSRLS, the migration raises a warning and skips, matching the pattern used by the base schema's RLS block. Numbered v24 to slot after v0.18.0's v20-v23 sources-migration wave.
+- **Doctor check widened:** `src/commands/doctor.ts` RLS check now scans every public table from `pg_tables`, not a hardcoded 10-name allowlist. Severity upgraded `warn → fail`. Success message shows table count. Failure message includes per-table quoted `ALTER TABLE "public"."<name>" ENABLE ROW LEVEL SECURITY;` remediation SQL.
 - **Escape hatch — "write it in blood":** Doctor reads `obj_description` for each non-RLS public table. Tables whose comment matches `^GBRAIN:RLS_EXEMPT\s+reason=\S.{3,}` count as explicitly exempt. Exempt tables are enumerated by name on every successful doctor run so the exemption list never goes invisible. No CLI subcommand — deliberate friction; operators must set the comment in psql.
 - **PGLite skip:** PGLite is embedded and single-user with no PostgREST; the RLS check now skips on PGLite with an explicit `ok` message ("Skipped — no PostgREST exposure, RLS not applicable") instead of the misleading `warn` it emitted before. Partial polish: pgvector, jsonb_integrity, and markdown_body_completeness checks still hit the same `getConnection()` throw → warn pattern on PGLite. Separate follow-up.
 - **Tests:**
   - `test/doctor.test.ts` gains four source-grep structural regression guards: scan has no `tablename IN` filter, status=fail with quoted-identifier remediation, PGLite skip wrapper present, `GBRAIN:RLS_EXEMPT` + `reason=` parsing present.
   - `test/e2e/mechanical.test.ts` `E2E: RLS Verification` block rewritten: the old hardcoded-allowlist query test is replaced with a "every public table has RLS" assertion; four new CLI-spawn tests verify fail-on-no-RLS (with exit code + ALTER TABLE in JSON message), exempt-with-valid-reason passes, exempt-with-empty-reason still fails, and unrelated comment still fails. All helpers use `try/finally` with unique suffix-per-run table names so assertion failures never pollute subsequent tests.
-  - `test/migrate.test.ts` gains a structural guard for v17: exists, name matches, all 10 ALTER TABLE statements present, BYPASSRLS gating present, LATEST_VERSION ≥ 17.
+  - `test/migrate.test.ts` gains a structural guard for v24: exists, name matches, all 10 ALTER TABLE statements present, BYPASSRLS gating present, LATEST_VERSION ≥ 24.
 - **Docs:** new `docs/guides/rls-and-you.md` — one-page explainer covering why RLS matters, what to do when doctor fails, the escape hatch format + rules, auditing exemptions, PGLite behavior, self-hosted Postgres framing.
-- **Version reconciliation:** `VERSION` (`0.17.0` → `0.18.0`) and `package.json` (`0.16.4` → `0.18.0`) both land on `0.18.0`. `src/version.ts` reads from `package.json`, so runtime `gbrain --version` was stuck at `0.16.4` before this release. Now accurate.
+- **Version reconciliation:** `VERSION` and `package.json` land on `0.18.1`. Prior releases had drift (`VERSION=0.17.0`, `package.json=0.16.4`) that v0.18.0 fixed; this release continues the reconciliation.
 - **CHANGELOG privacy sweep:** replaced a stale `@Wintermute` credit in the 0.17.0 entry with "Garry's OpenClaw" per the [CLAUDE.md privacy rule](CLAUDE.md).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+## [0.18.0] - 2026-04-22
+
+## **Multi-source brains. One database, many repos. Federated or isolated, you choose.**
+## **`gbrain sources` is the new subcommand. `.gbrain-source` is the new dotfile.**
+
+A single gbrain database can now hold multiple knowledge repos — your wiki, your gstack checkout, your yc-media pipeline, your garrys-list essays — with clean scoping per source. Slugs are unique per source, not globally, so two sources can both have `topics/ai` and they are different pages. Every page, every file, every ingest_log row is scoped to a `sources(id)` row.
+
+Per-source federation controls whether a source participates in unqualified default search. `federated=true` is cross-recall (your wiki + gstack both show up when you search "retry budgets"). `federated=false` is isolation (your yc-media content never leaks into your personal writing searches). Flip with `gbrain sources federate <id>` / `unfederate <id>`.
+
+Per-directory default via `.gbrain-source` dotfile walk-up + `GBRAIN_SOURCE` env var. Same mental model as kubectl / terraform / git: `cd ~/yc-media && gbrain query "X"` just works, no `--source` flag needed. Resolution priority: explicit flag > env > dotfile > registered-path-longest-prefix > `sources.default` config > literal `default` fallback.
+
+### The numbers that matter
+
+9 bisectable commits. 4 new schema migrations. ~85 new tests. Full suite: 2063 pass / 17 fail (the 17 pre-existing master timeouts unchanged). Migration chain runs end-to-end against real PGLite in under 1 second for the integration test.
+
+| Metric | BEFORE v0.17 | AFTER v0.18 | Δ |
+|---|---|---|---|
+| Max repos per brain | 1 | unlimited | unbounded |
+| Slug uniqueness | global | per-source | composite |
+| Multi-source search | impossible | default (for federated) | native |
+| New CLI commands | — | 9 (`sources add/list/remove/rename/default/attach/detach/federate/unfederate`) | +9 |
+| Schema migrations shipped | 0 new | 4 (v20-v23) | +4 |
+| New unit + integration tests | — | ~85 | +85 |
+
+### What this means for agents
+
+When a brain has multiple sources, every search result carries `source_id`. Agents cite in `[source-id:slug]` form — `[wiki:topics/ai]` or `[gstack:plans/retry-policy]` — so the user can trace which repo each fact came from. The citation key is `sources.id` (immutable), so renaming a source's display name via `gbrain sources rename` never breaks existing citations.
+
+Back-compat is total. Pre-v0.18 brains upgrade into a seeded `default` source with `federated=true`, and their existing code paths target `default` via a schema DEFAULT clause. You literally do not have to change anything to upgrade; you only change things if you want to add a second source.
+
+## To take advantage of v0.18.0
+
+`gbrain upgrade` should do this automatically. If it didn't, or if `gbrain doctor`
+warns about a partial migration:
+
+1. **Run the orchestrator manually:**
+   ```bash
+   gbrain apply-migrations --yes
+   ```
+2. **Your agent reads `skills/migrations/v0.18.0.md` the next time you interact with it.** The migration chain is fully mechanical (v20 creates the sources table, v21 adds pages.source_id + composite UNIQUE, v22 adds links.resolution_type, v23 adds files.source_id + page_id + file_migration_ledger). No manual data work needed.
+3. **Verify the outcome:**
+   ```bash
+   gbrain sources list     # should show 'default' federated, with your existing page count
+   gbrain stats            # existing behavior unchanged
+   gbrain doctor
+   ```
+4. **To start using multi-source:**
+   ```bash
+   gbrain sources add gstack --path ~/.gstack --no-federated
+   cd ~/.gstack && gbrain sources attach gstack
+   gbrain sync --source gstack
+   ```
+5. **If any step fails or the numbers look wrong,** please file an issue: https://github.com/garrytan/gbrain/issues with:
+   - output of `gbrain doctor`
+   - contents of `~/.gbrain/upgrade-errors.jsonl` if it exists
+   - which step broke
+
+### Itemized changes
+
+#### Added
+
+- **`gbrain sources` subcommand group** — add, list, remove, rename, default, attach, detach, federate, unfederate. See `docs/guides/multi-source-brains.md` for three canonical scenarios (unified wiki+gstack / purpose-separated yc-media+garrys-list / mixed).
+- **`sources` table** — first-class multi-repo primitive. `(id, name, local_path, last_commit, last_sync_at, config)`. Citation key is `sources.id`, immutable, validated `[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?`.
+- **`pages.source_id` column + composite UNIQUE (source_id, slug)** — slugs unique per source. DEFAULT 'default' on the column so existing single-source callers target the default source automatically via schema default.
+- **`.gbrain-source` dotfile** — walk-up resolution like kubectl/terraform/git. `gbrain sources attach <id>` writes it in CWD. Auto-selects the source for any command run from that directory or any subdirectory.
+- **`GBRAIN_SOURCE` env var** — power-user / CI / script escape hatch. Second highest priority in resolution (after explicit `--source <id>`).
+- **Qualified wikilink syntax `[[source:slug]]`** — new in v0.18 extractor. Unqualified `[[slug]]` still resolves via local-first fallback. `links.resolution_type ENUM('qualified','unqualified')` records which kind each edge is for future `gbrain extract --refresh-unqualified` re-resolution.
+- **`files.source_id` + `files.page_id`** — files now scope per source + reference pages by id (not slug). `file_migration_ledger` drives the S3/Supabase object rewrite under the pending → copy_done → db_updated → complete state machine.
+- **`gbrain sync --source <id>`** — per-source sync reads local_path + last_commit from the sources table, writes last_sync_at back. Single-source brains keep using the pre-v0.17 `sync.repo_path` / `sync.last_commit` config keys unchanged.
+
+#### Changed
+
+- **Search dedup is now source-aware.** Pre-v0.18 keyed on slug alone; under composite uniqueness that would collapse two same-slug pages in different sources. `pageKey(r) = source_id:slug` is the one canonical helper across all four dedup layers + compiled-truth guarantee. Codex review flagged this as regression-critical.
+- **`SearchResult.source_id` optional field** — populated by engine SELECT JOINs. Falls back to `'default'` for pre-v0.18 rows that lacked the column.
+- **Migration runner sorts by version** — if anyone adds a migration out of order in `MIGRATIONS[]`, the sort guards against silent skips.
+
+#### Migrations
+
+- **v20** `sources_table_additive` — additive-only. Creates sources table + seeds default row with `{"federated": true}`. Inherits existing `sync.repo_path` / `sync.last_commit`.
+- **v21** `pages_source_id_composite_unique` — adds `pages.source_id` with DEFAULT, swaps global `UNIQUE(slug)` for composite `UNIQUE(source_id, slug)`. Lands atomically with the engine's `ON CONFLICT (source_id, slug)` rewrite.
+- **v22** `links_resolution_type` — adds `links.resolution_type` CHECK column.
+- **v23** `files_source_id_page_id_ledger` — Postgres-only (PGLite has no files table). Adds `files.source_id` + `files.page_id`, backfills `page_id` from legacy `page_slug`, creates `file_migration_ledger`.
+
+#### Tests
+
+- `test/sources.test.ts` (14 tests) — CLI dispatcher, validation, overlapping-path guard.
+- `test/source-resolver.test.ts` (14 tests) — full 6-priority resolution coverage including longest-prefix match.
+- `test/storage-backfill.test.ts` (13 tests) — state machine + 3 crash-point recovery tests (Codex flagged each).
+- `test/multi-source-integration.test.ts` (16 tests) — end-to-end against real PGLite, migration chain v2→v23.
+- `test/link-extraction.test.ts` (+6) — qualified `[[source:slug]]` parsing + masking + v22 structural.
+- `test/dedup.test.ts` (+4) — regression-critical source-aware composite key tests.
+- `test/migrate.test.ts` (+18) — v20/v21/v22/v23 structural assertions.
+
+#### Docs
+
+- `docs/guides/multi-source-brains.md` — new getting-started guide (federated / isolated / mixed scenarios).
+- `skills/migrations/v0.18.0.md` — agent-facing migration skill.
+- `skills/brain-ops/SKILL.md` — new "Cross-source citation format" section.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 
 ## [0.17.0] - 2026-04-22
 
