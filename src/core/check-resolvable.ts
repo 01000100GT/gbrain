@@ -48,7 +48,9 @@ export interface ResolvableIssue {
     | 'routing_fixture_lint'
     // Check 6 (W3): brain-filing audit findings.
     | 'filing_missing_writes_to'
-    | 'filing_unknown_directory';
+    | 'filing_unknown_directory'
+    // D-CX-9: scaffolded skill still carries SKILLIFY_STUB sentinel.
+    | 'skillify_stub_unreplaced';
   severity: 'error' | 'warning';
   skill: string;
   message: string;
@@ -493,6 +495,43 @@ export function checkResolvable(skillsDir: string): ResolvableReport {
       message: `Malformed routing fixture ${m.file}:${m.line}`,
       action: `Fix the JSONL in routing-eval.jsonl at line ${m.line}: ${m.error}`,
     });
+  }
+
+  // D-CX-9 SKILLIFY_STUB sentinel check: scan every SKILL.md + script
+  // file under skillsDir for the sentinel marker emitted by
+  // `gbrain skillify scaffold`. Presence means a scaffolded skill
+  // shipped without a real implementation — warning-severity in
+  // default mode, error-promoted under --strict via D-CX-3.
+  for (const skill of manifest) {
+    const skillDir = join(skillsDir, skill.path.replace(/\/SKILL\.md$/, ''));
+    const scriptDir = join(skillDir, 'scripts');
+    const candidates: string[] = [join(skillsDir, skill.path)];
+    if (existsSync(scriptDir)) {
+      try {
+        for (const f of readdirSync(scriptDir)) {
+          if (f.match(/\.(ts|mjs|js|py)$/)) candidates.push(join(scriptDir, f));
+        }
+      } catch {
+        // Skip unreadable script dir.
+      }
+    }
+    for (const candidate of candidates) {
+      try {
+        const content = readFileSync(candidate, 'utf-8');
+        if (content.includes('SKILLIFY_STUB: replace before running check-resolvable --strict')) {
+          issues.push({
+            type: 'skillify_stub_unreplaced',
+            severity: 'warning',
+            skill: skill.name,
+            message: `Skill '${skill.name}' still contains the SKILLIFY_STUB sentinel in ${relative(skillsDir, candidate)}`,
+            action: `Replace the SKILLIFY_STUB sentinel in ${candidate} with a real implementation or remove the file. D-CX-9 gate.`,
+          });
+          break; // one issue per skill
+        }
+      } catch {
+        // Skip unreadable file.
+      }
+    }
   }
 
   // Check 6 (W3, v0.17): brain-filing audit. Warning-only per

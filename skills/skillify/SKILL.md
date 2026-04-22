@@ -60,14 +60,23 @@ For the feature being skillified, answer:
 
 - **Feature name**: what does it do in one line?
 - **Code path**: where does the implementation live (file path)?
-- **Checklist status**: run `scripts/skillify-check.ts <path>` (or write
-  the 10-item checklist manually) and note which items are missing.
+- **Checklist status**: run `gbrain skillify check <path>` (preferred)
+  or the legacy `scripts/skillify-check.ts <path>` shim. Both produce
+  the same 10-item scorecard. Note which items are missing.
 
 ### Phase 2: Create missing pieces in order
 
-Work the list top-down. Each earlier item constrains what later items look
-like (the SKILL.md contract determines what tests assert; tests determine
-what evals gate; the resolver entry determines what trigger-eval checks).
+**Fast path — brand-new skill:** run `gbrain skillify scaffold <name>
+--description "..." [--triggers "p1,p2,p3"] [--writes-pages --writes-to
+"people/,companies/"]`. This creates all 5 stub files atomically and
+appends an idempotent resolver row. Every scaffolded file carries the
+`SKILLIFY_STUB` sentinel; `gbrain check-resolvable --strict` will fail
+CI until you replace the stubs with real content.
+
+**Manual path — extending an existing skill:** work the list top-down.
+Each earlier item constrains what later items look like (the SKILL.md
+contract determines what tests assert; tests determine what evals gate;
+the resolver entry determines what trigger-eval checks).
 
 1. Write `SKILL.md` first. Frontmatter must include `name`, `version`,
    `description`, `triggers[]`, `tools[]`, `mutating`. Body has at minimum
