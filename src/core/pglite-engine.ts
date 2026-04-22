@@ -210,7 +210,7 @@ export class PGLiteEngine implements BrainEngine {
 
     const { rows } = await this.db.query(
       `SELECT
-        p.slug, p.id as page_id, p.title, p.type,
+        p.slug, p.id as page_id, p.title, p.type, p.source_id,
         cc.id as chunk_id, cc.chunk_index, cc.chunk_text, cc.chunk_source,
         ts_rank(p.search_vector, websearch_to_tsquery('english', $1)) AS score,
         CASE WHEN p.updated_at < (
@@ -240,7 +240,7 @@ export class PGLiteEngine implements BrainEngine {
 
     const { rows } = await this.db.query(
       `SELECT
-        p.slug, p.id as page_id, p.title, p.type,
+        p.slug, p.id as page_id, p.title, p.type, p.source_id,
         cc.id as chunk_id, cc.chunk_index, cc.chunk_text, cc.chunk_source,
         1 - (cc.embedding <=> $1::vector) AS score,
         CASE WHEN p.updated_at < (

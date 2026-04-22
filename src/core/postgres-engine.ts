@@ -266,7 +266,7 @@ export class PostgresEngine implements BrainEngine {
       await sql`SET LOCAL statement_timeout = '8s'`;
       return await sql`
         SELECT
-          p.slug, p.id as page_id, p.title, p.type,
+          p.slug, p.id as page_id, p.title, p.type, p.source_id,
           cc.id as chunk_id, cc.chunk_index, cc.chunk_text, cc.chunk_source,
           1 - (cc.embedding <=> ${vecStr}::vector) AS score,
           false AS stale
