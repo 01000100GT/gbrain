@@ -113,10 +113,10 @@ export class PGLiteEngine implements BrainEngine {
 
   async putPage(slug: string, page: PageInput): Promise<Page> {
     slug = validateSlug(slug);
-    const hash = page.content_hash || contentHash(page.compiled_truth, page.timeline || '');
+    const hash = page.content_hash || contentHash(page);
     const frontmatter = page.frontmatter || {};
 
-    // v0.17.0 Step 2: source_id relies on the schema DEFAULT 'default' so
+    // v0.18.0 Step 2: source_id relies on the schema DEFAULT 'default' so
     // existing callers still target the default source without threading
     // a parameter. ON CONFLICT target becomes (source_id, slug) since the
     // global UNIQUE(slug) was dropped in migration v17. Step 5+ will
@@ -658,6 +658,21 @@ export class PGLiteEngine implements BrainEngine {
       result.set(r.slug, Number(r.cnt));
     }
     return result;
+  }
+
+  async findOrphanPages(): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
+    const { rows } = await this.db.query(
+      `SELECT
+         p.slug,
+         COALESCE(p.title, p.slug) AS title,
+         p.frontmatter->>'domain' AS domain
+       FROM pages p
+       WHERE NOT EXISTS (
+         SELECT 1 FROM links l WHERE l.to_page_id = p.id
+       )
+       ORDER BY p.slug`
+    );
+    return rows as Array<{ slug: string; title: string; domain: string | null }>;
   }
 
   // Tags

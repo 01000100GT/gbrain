@@ -20,7 +20,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ============================================================
--- sources: multi-brain tenancy (v0.17.0). See src/schema.sql for design notes.
+-- sources: multi-brain tenancy (v0.18.0). See src/schema.sql for design notes.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS sources (
   id            TEXT PRIMARY KEY,
@@ -39,7 +39,7 @@ INSERT INTO sources (id, name, config)
 -- ============================================================
 -- pages: the core content table
 -- ============================================================
--- v0.17.0 (Step 2): source_id scopes each page. Slugs are unique per
+-- v0.18.0 (Step 2): source_id scopes each page. Slugs are unique per
 -- source — see src/schema.sql for the design notes.
 CREATE TABLE IF NOT EXISTS pages (
   id            SERIAL PRIMARY KEY,
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS links (
   link_source    TEXT    CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual')),
   origin_page_id INTEGER REFERENCES pages(id) ON DELETE SET NULL,
   origin_field   TEXT,
-  -- v0.17.0 Step 4: see src/schema.sql.
+  -- v0.18.0 Step 4: see src/schema.sql.
   resolution_type TEXT   CHECK (resolution_type IS NULL OR resolution_type IN ('qualified', 'unqualified')),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT links_from_to_type_source_origin_unique
@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS page_versions (
 CREATE INDEX IF NOT EXISTS idx_versions_page ON page_versions(page_id);
 
 -- ============================================================
--- ingest_log (v0.17.0 Step 1: source_id deferred to v17, see src/schema.sql)
+-- ingest_log (v0.18.0 Step 1: source_id deferred to v17, see src/schema.sql)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ingest_log (
   id            SERIAL PRIMARY KEY,
@@ -334,6 +334,22 @@ CREATE TABLE IF NOT EXISTS subagent_rate_leases (
   expires_at    TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rate_leases_key_expires ON subagent_rate_leases (key, expires_at);
+
+-- ============================================================
+-- Cycle coordination lock — v0.17 runCycle primitive
+-- ============================================================
+-- See src/schema.sql for full rationale. One row per active cycle.
+-- PGLite is single-writer, so the lock doubly protects: the DB-level
+-- row + the file lock at ~/.gbrain/cycle.lock prevent concurrent
+-- CLI invocations from racing.
+CREATE TABLE IF NOT EXISTS gbrain_cycle_locks (
+  id              TEXT        PRIMARY KEY,
+  holder_pid      INT         NOT NULL,
+  holder_host     TEXT,
+  acquired_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ttl_expires_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cycle_locks_ttl ON gbrain_cycle_locks(ttl_expires_at);
 
 -- ============================================================
 -- Trigger-based search_vector (spans pages + timeline_entries)

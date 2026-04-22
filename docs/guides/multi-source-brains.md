@@ -170,7 +170,7 @@ cd ~/.gstack && gbrain sources attach gstack && gbrain sync
 
 Two commands. The existing default source is untouched.
 
-## Not in v0.17.0
+## Not in v0.18.0
 
 - Session transcript ingest (`.jsonl`, raised size cap, session
   PageType) — v0.18.

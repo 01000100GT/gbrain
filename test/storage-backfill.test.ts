@@ -1,5 +1,5 @@
 /**
- * v0.17.0 Step 7 — file_migration_ledger state-machine unit tests.
+ * v0.18.0 Step 7 — file_migration_ledger state-machine unit tests.
  *
  * No real storage — we stub a StorageBackend that records every
  * call so we can assert the crash-point recovery semantics without
@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { runStorageBackfill } from '../src/commands/migrations/v0_17_0-storage-backfill.ts';
+import { runStorageBackfill } from '../src/commands/migrations/v0_18_0-storage-backfill.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import type { StorageBackend } from '../src/core/storage.ts';
 

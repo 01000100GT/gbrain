@@ -24,6 +24,8 @@ export interface SyncResult {
   deleted: number;
   renamed: number;
   chunksCreated: number;
+  /** Pages re-embedded during this sync's auto-embed step. 0 if --no-embed or skipped. */
+  embedded: number;
   pagesAffected: string[];
   failedFiles?: number; // count of parse failures (Bug 9)
 }
@@ -40,7 +42,7 @@ export interface SyncOpts {
   /** Bug 9 — re-attempt unacknowledged failures explicitly (CLI --retry-failed). */
   retryFailed?: boolean;
   /**
-   * v0.17.0 Step 5 — sync a specific named source. When set, sync reads
+   * v0.18.0 Step 5 — sync a specific named source. When set, sync reads
    * local_path + last_commit from the sources table (not the global
    * config.sync.* keys) and writes last_commit + last_sync_at back to
    * the same row. Backward compat: when undefined, sync uses the
@@ -56,7 +58,7 @@ function git(repoPath: string, ...args: string[]): string {
   }).trim();
 }
 
-// v0.17.0 Step 5: source-scoped sync state helpers. When opts.sourceId
+// v0.18.0 Step 5: source-scoped sync state helpers. When opts.sourceId
 // is set, read/write the per-source row instead of the global config
 // keys. These wrappers centralize the branch so every read/write site
 // picks the right storage — future Step 5 work (failure-tracking per
@@ -173,6 +175,7 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
       toCommit: headCommit,
       added: 0, modified: 0, deleted: 0, renamed: 0,
       chunksCreated: 0,
+      embedded: 0,
       pagesAffected: [],
     };
   }
@@ -222,6 +225,7 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
       deleted: filtered.deleted.length,
       renamed: filtered.renamed.length,
       chunksCreated: 0,
+      embedded: 0,
       pagesAffected: [],
     };
   }
@@ -236,6 +240,7 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
       toCommit: headCommit,
       added: 0, modified: 0, deleted: 0, renamed: 0,
       chunksCreated: 0,
+      embedded: 0,
       pagesAffected: [],
     };
   }
@@ -358,6 +363,7 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
         deleted: filtered.deleted.length,
         renamed: filtered.renamed.length,
         chunksCreated,
+        embedded: 0,
         pagesAffected,
         failedFiles: failedFiles.length,
       };
@@ -396,10 +402,15 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
   }
 
   // Auto-embed (skip for large syncs — embedding calls OpenAI)
+  let embedded = 0;
   if (!noEmbed && pagesAffected.length > 0 && pagesAffected.length <= 100) {
     try {
       const { runEmbed } = await import('./embed.ts');
       await runEmbed(engine, ['--slugs', ...pagesAffected]);
+      // Before commit 2 lands: runEmbed is void. Best estimate is pagesAffected,
+      // since runEmbed re-embeds every requested slug. Commit 2 sharpens this
+      // with EmbedResult.embedded.
+      embedded = pagesAffected.length;
     } catch { /* embedding is best-effort */ }
   } else if (noEmbed || totalChanges > 100) {
     console.log(`Text imported. Run 'gbrain embed --stale' to generate embeddings.`);
@@ -414,6 +425,7 @@ export async function performSync(engine: BrainEngine, opts: SyncOpts): Promise<
     deleted: filtered.deleted.length,
     renamed: filtered.renamed.length,
     chunksCreated,
+    embedded,
     pagesAffected,
   };
 }
@@ -424,6 +436,33 @@ async function performFullSync(
   headCommit: string,
   opts: SyncOpts,
 ): Promise<SyncResult> {
+  // Dry-run: walk the repo, count syncable files, return without writing.
+  // Fixes the silent-write-on-dry-run bug where performFullSync called
+  // runImport unconditionally regardless of opts.dryRun.
+  if (opts.dryRun) {
+    const { collectMarkdownFiles } = await import('./import.ts');
+    const allFiles = collectMarkdownFiles(repoPath);
+    const syncableRelPaths = allFiles
+      .map(abs => relative(repoPath, abs))
+      .filter(rel => isSyncable(rel));
+    console.log(
+      `Full-sync dry run: ${syncableRelPaths.length} file(s) would be imported ` +
+      `from ${repoPath} @ ${headCommit.slice(0, 8)}.`,
+    );
+    return {
+      status: 'dry_run',
+      fromCommit: null,
+      toCommit: headCommit,
+      added: syncableRelPaths.length,
+      modified: 0,
+      deleted: 0,
+      renamed: 0,
+      chunksCreated: 0,
+      embedded: 0,
+      pagesAffected: [],
+    };
+  }
+
   console.log(`Running full import of ${repoPath}...`);
   const { runImport } = await import('./import.ts');
   const importArgs = [repoPath];
@@ -449,6 +488,7 @@ async function performFullSync(
         toCommit: headCommit,
         added: 0, modified: 0, deleted: 0, renamed: 0,
         chunksCreated: result.chunksCreated,
+        embedded: 0,
         pagesAffected: [],
         failedFiles: result.failures.length,
       };
@@ -458,17 +498,21 @@ async function performFullSync(
   }
 
   // Persist sync state so next sync is incremental (C1 fix: was missing).
-  // v0.17.0 Step 5: routed through writeSyncAnchor so --source pins it
+  // v0.18.0 Step 5: routed through writeSyncAnchor so --source pins it
   // to the right sources row rather than the global config.
   await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit);
   await engine.setConfig('sync.last_run', new Date().toISOString());
   await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
 
-  // Full sync doesn't track pagesAffected, so fall back to embed --stale
+  // Full sync doesn't track pagesAffected, so fall back to embed --stale.
+  // Before commit 2: runEmbed is void; use result.imported as best estimate of
+  // pages touched. Commit 2 sharpens this with real EmbedResult counts.
+  let embedded = 0;
   if (!opts.noEmbed) {
     try {
       const { runEmbed } = await import('./embed.ts');
       await runEmbed(engine, ['--stale']);
+      embedded = result.imported;
     } catch { /* embedding is best-effort */ }
   }
 
@@ -476,8 +520,12 @@ async function performFullSync(
     status: 'first_sync',
     fromCommit: null,
     toCommit: headCommit,
-    added: 0, modified: 0, deleted: 0, renamed: 0,
-    chunksCreated: 0,
+    added: result.imported,
+    modified: 0,
+    deleted: 0,
+    renamed: 0,
+    chunksCreated: result.chunksCreated,
+    embedded,
     pagesAffected: [],
   };
 }
@@ -494,7 +542,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   const skipFailed = args.includes('--skip-failed');
   const retryFailed = args.includes('--retry-failed');
 
-  // v0.17.0 Step 5: --source resolves to a sources(id) row. Falls back
+  // v0.18.0 Step 5: --source resolves to a sources(id) row. Falls back
   // to pre-v0.17 global config (sync.repo_path + sync.last_commit) when
   // no flag, no env, no dotfile is present.
   const explicitSource = args.find((a, i) => args[i - 1] === '--source') || null;
@@ -559,10 +607,11 @@ function printSyncResult(result: SyncResult) {
     case 'synced':
       console.log(`Synced ${result.fromCommit?.slice(0, 8)}..${result.toCommit.slice(0, 8)}:`);
       console.log(`  +${result.added} added, ~${result.modified} modified, -${result.deleted} deleted, R${result.renamed} renamed`);
-      console.log(`  ${result.chunksCreated} chunks created`);
+      console.log(`  ${result.chunksCreated} chunks created${result.embedded > 0 ? `, ${result.embedded} pages embedded` : ''}`);
       break;
     case 'first_sync':
       console.log(`First sync complete. Checkpoint: ${result.toCommit.slice(0, 8)}`);
+      console.log(`  ${result.added} file(s) imported, ${result.chunksCreated} chunks${result.embedded > 0 ? `, ${result.embedded} pages embedded` : ''}`);
       break;
     case 'dry_run':
       break; // already printed in performSync

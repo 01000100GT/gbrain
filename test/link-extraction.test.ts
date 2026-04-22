@@ -612,9 +612,9 @@ describe('FRONTMATTER_LINK_MAP integrity', () => {
 
 
 // ─────────────────────────────────────────────────────────────────
-// v0.17.0 Step 4 — qualified wikilink syntax [[source-id:dir/slug]]
+// v0.18.0 Step 4 — qualified wikilink syntax [[source-id:dir/slug]]
 // ─────────────────────────────────────────────────────────────────
-describe("extractEntityRefs — v0.17.0 qualified wikilinks", () => {
+describe("extractEntityRefs — v0.18.0 qualified wikilinks", () => {
   test("[[wiki:topics/ai]] extracts with sourceId=wiki", () => {
     const refs = extractEntityRefs("See [[concepts/ai]] vs [[wiki:concepts/ai]] for wiki-specific take.");
     // One unqualified + one qualified.
@@ -661,16 +661,16 @@ describe("extractEntityRefs — v0.17.0 qualified wikilinks", () => {
   });
 });
 
-describe("v0.17.0 migration v18 — links_resolution_type", () => {
-  test("migration v18 exists with CHECK constraint", async () => {
+describe("v0.18.0 migration v22 — links_resolution_type", () => {
+  test("migration v22 exists with CHECK constraint", async () => {
     const { MIGRATIONS } = await import("../src/core/migrate.ts");
-    const v18 = MIGRATIONS.find(m => m.version === 18);
-    expect(v18).toBeDefined();
-    expect(v18!.name).toBe("links_resolution_type");
-    expect(v18!.sql).toContain("ADD COLUMN IF NOT EXISTS resolution_type");
-    expect(v18!.sql).toContain("links_resolution_type_check");
-    expect(v18!.sql).toContain("qualified");
-    expect(v18!.sql).toContain("unqualified");
+    const v22 = MIGRATIONS.find(m => m.version === 22);
+    expect(v22).toBeDefined();
+    expect(v22!.name).toBe("links_resolution_type");
+    expect(v22!.sql).toContain("ADD COLUMN IF NOT EXISTS resolution_type");
+    expect(v22!.sql).toContain("links_resolution_type_check");
+    expect(v22!.sql).toContain("qualified");
+    expect(v22!.sql).toContain("unqualified");
   });
 });
 

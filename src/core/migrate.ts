@@ -450,9 +450,9 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
-    version: 19,
+    version: 23,
     name: 'files_source_id_page_id_ledger',
-    // v0.17.0 Step 7 (Lane E) — additive only: adds files.source_id and
+    // v0.18.0 Step 7 (Lane E) — additive only: adds files.source_id and
     // files.page_id columns + creates the file_migration_ledger that
     // drives phase-B storage object rewrites. Does NOT drop page_slug
     // yet (kept for backward compat; a later release cleans up once the
@@ -467,7 +467,7 @@ export const MIGRATIONS: Migration[] = [
     //   pending → copy_done → db_updated → complete
     //   any state → failed (with error detail)
     //
-    // Phase B in the v0_17_0 orchestrator processes `status != complete`
+    // Phase B in the v0_18_0 orchestrator processes `status != complete`
     // rows. Re-runnable: resumes from whichever state it stopped in.
     sql: '',
     handler: async (engine) => {
@@ -502,7 +502,7 @@ export const MIGRATIONS: Migration[] = [
 
       await engine.runMigration(19, `
         -- 2. file_migration_ledger — drives the storage object rewrite
-        --    in the v0_17_0 orchestrator's phase B. Seeded from current
+        --    in the v0_18_0 orchestrator's phase B. Seeded from current
         --    files rows; re-seed is idempotent via NOT EXISTS guard.
         CREATE TABLE IF NOT EXISTS file_migration_ledger (
           file_id           INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
@@ -533,9 +533,9 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
-    version: 18,
+    version: 22,
     name: 'links_resolution_type',
-    // v0.17.0 Step 4 (Lane B) — adds links.resolution_type column so
+    // v0.18.0 Step 4 (Lane B) — adds links.resolution_type column so
     // each edge records whether its target source was pinned at
     // extraction time via `[[source:slug]]` (qualified) or resolved
     // via local-first fallback (unqualified). Unqualified edges are
@@ -558,9 +558,9 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    version: 17,
+    version: 21,
     name: 'pages_source_id_composite_unique',
-    // v0.17.0 Step 2 (Lane B) — adds pages.source_id with DEFAULT 'default'
+    // v0.18.0 Step 2 (Lane B) — adds pages.source_id with DEFAULT 'default'
     // and swaps the global UNIQUE(slug) for the composite UNIQUE(source_id,
     // slug). Lands alongside the engine SQL rewrite that makes every
     // ON CONFLICT (slug) → ON CONFLICT (source_id, slug) so the constraint
@@ -595,9 +595,9 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    version: 16,
+    version: 20,
     name: 'sources_table_additive',
-    // v0.17.0 Step 1 (Lane A) — **additive only** so Step 1 is a safe
+    // v0.18.0 Step 1 (Lane A) — **additive only** so Step 1 is a safe
     // standalone commit. This migration installs the sources primitive
     // WITHOUT breaking the engine's existing ON CONFLICT (slug) upserts.
     //
@@ -615,7 +615,7 @@ export const MIGRATIONS: Migration[] = [
     //   - file_migration_ledger
     //   - links.resolution_type
     //
-    // The v0.17.0 orchestrator's phaseCVerify allows this split: it
+    // The v0.18.0 orchestrator's phaseCVerify allows this split: it
     // checks for sources('default'), but the "composite UNIQUE" +
     // "pages.source_id NOT NULL" assertions only run after v17 lands.
     //
@@ -659,6 +659,32 @@ export const MIGRATIONS: Migration[] = [
          SET max_stalled = 5
        WHERE status IN ('waiting','active','delayed','waiting-children','paused')
          AND max_stalled < 5;
+    `,
+  },
+  {
+    version: 16,
+    name: 'cycle_locks_table',
+    // v0.17 brain maintenance cycle (runCycle primitive).
+    // PgBouncer transaction pooling strips session-scoped advisory locks
+    // (pg_try_advisory_lock) across connection checkouts, so we can't use
+    // them as the cycle-coordination primitive. A row with a TTL works
+    // through every pooler: any backend can SELECT/UPDATE/DELETE it, no
+    // session state required.
+    //
+    // Acquire: INSERT ... ON CONFLICT (id) DO UPDATE ... WHERE ttl_expires_at < NOW()
+    //          returning ... — empty RETURNING = lock held by live holder.
+    // Refresh: UPDATE ... SET ttl_expires_at = NOW() + interval '30 min'
+    //          WHERE id = 'gbrain-cycle' AND holder_pid = <my pid> — between phases.
+    // Release: DELETE WHERE id = 'gbrain-cycle' AND holder_pid = <my pid>.
+    sql: `
+      CREATE TABLE IF NOT EXISTS gbrain_cycle_locks (
+        id TEXT PRIMARY KEY,
+        holder_pid INT NOT NULL,
+        holder_host TEXT,
+        acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ttl_expires_at TIMESTAMPTZ NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_cycle_locks_ttl ON gbrain_cycle_locks(ttl_expires_at);
     `,
   },
 ];

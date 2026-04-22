@@ -6,7 +6,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ============================================================
--- sources: multi-repo / multi-brain tenancy (v0.17.0)
+-- sources: multi-repo / multi-brain tenancy (v0.18.0)
 -- ============================================================
 -- A source is a logical brain-within-the-DB: wiki, gstack, yc-media, etc.
 -- Every page/file/ingest_log row carries source_id.
@@ -45,7 +45,7 @@ INSERT INTO sources (id, name, config)
 -- ============================================================
 -- pages: the core content table
 -- ============================================================
--- v0.17.0 (Step 2): pages.source_id scopes each row to a sources(id) row.
+-- v0.18.0 (Step 2): pages.source_id scopes each row to a sources(id) row.
 -- Slugs are unique per source, NOT globally. The default source is
 -- seeded in the sources block above so the DEFAULT 'default' FK is
 -- always valid at INSERT time.
@@ -70,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_pages_frontmatter ON pages USING GIN(frontmatter)
 CREATE INDEX IF NOT EXISTS idx_pages_trgm ON pages USING GIN(title gin_trgm_ops);
 -- v0.13.1 #170: avoids 14.6s seqscan on large brains when listing pages newest-first.
 CREATE INDEX IF NOT EXISTS idx_pages_updated_at_desc ON pages (updated_at DESC);
--- v0.17.0: source-scoped scans (per /plan-eng-review Section 4).
+-- v0.18.0: source-scoped scans (per /plan-eng-review Section 4).
 CREATE INDEX IF NOT EXISTS idx_pages_source_id ON pages(source_id);
 
 -- ============================================================
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS links (
   link_source    TEXT    CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual')),
   origin_page_id INTEGER REFERENCES pages(id) ON DELETE SET NULL,
   origin_field   TEXT,
-  -- v0.17.0 Step 4: 'qualified' when the link was written as
+  -- v0.18.0 Step 4: 'qualified' when the link was written as
   -- [[source:slug]] (target source pinned). 'unqualified' when written
   -- as bare [[slug]] and resolved via local-first fallback at
   -- extraction time. NULL for legacy/manual/frontmatter edges.
@@ -195,7 +195,7 @@ CREATE INDEX IF NOT EXISTS idx_versions_page ON page_versions(page_id);
 -- ============================================================
 -- ingest_log
 -- ============================================================
--- NOTE (v0.17.0 Step 1): ingest_log.source_id is NOT added yet — lands
+-- NOTE (v0.18.0 Step 1): ingest_log.source_id is NOT added yet — lands
 -- in v17 alongside the sync rewrite (Step 5), which starts writing
 -- source-scoped entries.
 CREATE TABLE IF NOT EXISTS ingest_log (
@@ -252,7 +252,7 @@ CREATE TABLE IF NOT EXISTS mcp_request_log (
 -- ============================================================
 -- files: binary attachments stored in Supabase Storage
 -- ============================================================
--- v0.17.0 Step 7: files gains source_id + page_id alongside the
+-- v0.18.0 Step 7: files gains source_id + page_id alongside the
 -- legacy page_slug (kept for backward compat until a later release).
 -- The file_migration_ledger below drives the storage object rewrite.
 -- page_slug FK had ON UPDATE CASCADE — removed because slugs are no
@@ -283,8 +283,8 @@ CREATE INDEX IF NOT EXISTS idx_files_source_id ON files(source_id);
 CREATE INDEX IF NOT EXISTS idx_files_hash ON files(content_hash);
 
 -- ============================================================
--- file_migration_ledger (v0.17.0 Step 7)
--- Drives the storage-object rewrite performed by the v0_17_0
+-- file_migration_ledger (v0.18.0 Step 7)
+-- Drives the storage-object rewrite performed by the v0_18_0
 -- orchestrator's phase B. Keyed on file_id so two sources can share
 -- an old path during migration without PK collision (Codex second-
 -- pass caught this).
@@ -492,6 +492,24 @@ CREATE TABLE IF NOT EXISTS subagent_rate_leases (
   expires_at    TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rate_leases_key_expires ON subagent_rate_leases (key, expires_at);
+
+-- ============================================================
+-- Cycle coordination lock — v0.17 runCycle primitive
+-- ============================================================
+-- One row per active cycle. Any caller (autopilot daemon, Minions
+-- autopilot-cycle handler, gbrain dream CLI) tries to acquire this
+-- row before running a DB-write phase. Holders refresh ttl_expires_at
+-- between phases; crashed holders auto-release once TTL expires.
+-- Works through PgBouncer transaction pooling, unlike session-scoped
+-- pg_try_advisory_lock.
+CREATE TABLE IF NOT EXISTS gbrain_cycle_locks (
+  id              TEXT        PRIMARY KEY,
+  holder_pid      INT         NOT NULL,
+  holder_host     TEXT,
+  acquired_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ttl_expires_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cycle_locks_ttl ON gbrain_cycle_locks(ttl_expires_at);
 
 -- NOTIFY trigger for real-time job events (Postgres only, not PGLite)
 CREATE OR REPLACE FUNCTION notify_minion_job_change() RETURNS trigger AS $$

@@ -1,5 +1,5 @@
 /**
- * gbrain sources — manage multi-source brain configuration (v0.17.0).
+ * gbrain sources — manage multi-source brain configuration (v0.18.0).
  *
  * A source is a logical brain-within-the-DB: wiki, gstack, yc-media, etc.
  * Every page/file/ingest_log row is scoped to a sources(id) row. Slugs
@@ -353,7 +353,7 @@ export async function runSources(engine: BrainEngine, args: string[]): Promise<v
 }
 
 function printHelp(): void {
-  console.log(`gbrain sources — manage multi-source brain configuration (v0.17.0)
+  console.log(`gbrain sources — manage multi-source brain configuration (v0.18.0)
 
 Subcommands:
   add <id> --path <p> [--name <n>] [--federated|--no-federated]

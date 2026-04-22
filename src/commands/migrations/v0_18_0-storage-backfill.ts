@@ -1,5 +1,5 @@
 /**
- * v0.17.0 Step 7 — phase B storage backfill loader.
+ * v0.18.0 Step 7 — phase B storage backfill loader.
  *
  * Drives the `file_migration_ledger` state machine forward:
  *
@@ -20,7 +20,7 @@
  *     in the explicit "cleanup" sub-phase so old objects are
  *     preserved until a separate operator decision.
  *
- * Scope: v0.17.0 Step 7 DOES rewrite storage_path in the files table
+ * Scope: v0.18.0 Step 7 DOES rewrite storage_path in the files table
  * and copies the bytes to the new source-prefixed path. It does NOT
  * delete the old objects — that's reserved for a later release once
  * operators have had time to verify the new paths. Old and new

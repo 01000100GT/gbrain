@@ -1,5 +1,5 @@
 /**
- * v0.17.0 migration orchestrator — Multi-source brains.
+ * v0.18.0 migration orchestrator — Multi-source brains.
  *
  * Split across sub-versions of the migration registry for safety:
  *   - v16 (Step 1 / Lane A): additive-only. Installs sources table +
@@ -70,7 +70,7 @@ async function phaseBBackfillStorage(opts: OrchestratorOpts): Promise<Orchestrat
       // COPY objects. Operator then wires storage and re-runs.
       const storage = config.storage ? await loadStorageBackend(config.storage) : null;
 
-      const { runStorageBackfill } = await import('./v0_17_0-storage-backfill.ts');
+      const { runStorageBackfill } = await import('./v0_18_0-storage-backfill.ts');
       const report = await runStorageBackfill(engine, storage, { dryRun: !storage });
 
       if (report.total === 0) {
@@ -168,7 +168,7 @@ async function phaseCVerify(opts: OrchestratorOpts): Promise<OrchestratorPhaseRe
 
 async function orchestrator(opts: OrchestratorOpts): Promise<OrchestratorResult> {
   console.log('');
-  console.log('=== v0.17.0 — Multi-source brains ===');
+  console.log('=== v0.18.0 — Multi-source brains ===');
   if (opts.dryRun) console.log('  (dry-run; no side effects)');
   console.log('');
 
@@ -199,7 +199,7 @@ function finalize(phases: OrchestratorPhaseResult[], status: 'complete' | 'parti
   if (status !== 'failed') {
     try {
       appendCompletedMigration({
-        version: '0.17.0',
+        version: '0.18.0',
         completed_at: new Date().toISOString(),
         status: status as 'complete' | 'partial',
         phases: phases.map(p => ({ name: p.name, status: p.status })),
@@ -208,15 +208,15 @@ function finalize(phases: OrchestratorPhaseResult[], status: 'complete' | 'parti
       // Best-effort.
     }
   }
-  return { version: '0.17.0', status, phases };
+  return { version: '0.18.0', status, phases };
 }
 
-export const v0_17_0: Migration = {
-  version: '0.17.0',
+export const v0_18_0: Migration = {
+  version: '0.18.0',
   featurePitch: {
     headline: 'Multi-source brains: one database, many knowledge repos. Federation flag keeps them from polluting each other.',
     description:
-      'v0.17.0 introduces sources — a first-class primitive that lets one gbrain backend hold ' +
+      'v0.18.0 introduces sources — a first-class primitive that lets one gbrain backend hold ' +
       'multiple repos (wiki, gstack, yc-media, etc.) with clean scoping. Every page, file, and ' +
       'ingest_log row is now scoped to a source. Cross-source search is opt-in per source ' +
       '(federated=true) so isolated content (yc-media, garrys-list) never bleeds into your main ' +

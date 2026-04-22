@@ -8,7 +8,7 @@
  * 4. By page: max N chunks per page (default 2)
  * 5. Compiled truth guarantee: ensure at least 1 compiled_truth chunk per page
  *
- * v0.17.0: every page key is composite (source_id, slug). Pre-v0.17 this
+ * v0.18.0: every page key is composite (source_id, slug). Pre-v0.17 this
  * was slug alone — under multi-source uniqueness that would collapse two
  * same-slug pages in different sources into one, destroying recall.
  * Codex review flagged this as a regression-critical path. The

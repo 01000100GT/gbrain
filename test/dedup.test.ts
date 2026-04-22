@@ -156,13 +156,13 @@ describe('edge cases', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────
-// v0.17.0 Step 3 — source-aware dedup (REGRESSION-CRITICAL per Codex)
+// v0.18.0 Step 3 — source-aware dedup (REGRESSION-CRITICAL per Codex)
 // ─────────────────────────────────────────────────────────────────
 // Pre-v0.17 dedup collapsed on slug alone. Under multi-source
 // uniqueness, two same-slug pages in different sources ARE different
 // pages — collapsing them destroys cross-source recall. Codex flagged
 // this as a regression-critical path in the outside-voice review.
-describe('dedup — source-aware composite key (v0.17.0)', () => {
+describe('dedup — source-aware composite key (v0.18.0)', () => {
   test('same slug across two sources does NOT collapse via dedupBySource layer', () => {
     // Two pages, same slug, different sources. Both should survive
     // Layer 1 (top-3-per-page) because they are DIFFERENT pages.

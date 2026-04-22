@@ -1,5 +1,5 @@
 /**
- * v0.17.0 Step 6 — source resolution priority tests.
+ * v0.18.0 Step 6 — source resolution priority tests.
  *
  * Priority order (highest first):
  *   1. Explicit --source flag

@@ -1,5 +1,5 @@
 /**
- * v0.17.0 Step 6 — sources CLI subcommand tests.
+ * v0.18.0 Step 6 — sources CLI subcommand tests.
  *
  * Pure unit tests that exercise the subcommand dispatcher via a
  * stub BrainEngine. No DB required — we just confirm the SQL

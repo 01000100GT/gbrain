@@ -116,7 +116,7 @@ ingest event.
 No separate output. Brain-ops is an always-on behavior layer, not a report generator.
 The output is updated brain pages and enriched responses.
 
-## Cross-source citation format (v0.17.0+)
+## Cross-source citation format (v0.18.0+)
 
 When a brain has multiple sources (wiki, gstack, yc-media, etc.), every
 citation MUST include the source id: `[source-id:slug]`. Example:

@@ -1,5 +1,5 @@
 /**
- * Source resolution for CLI commands (v0.17.0).
+ * Source resolution for CLI commands (v0.18.0).
  *
  * Resolution priority (highest first):
  *   1. Explicit --source <id> flag (caller passes this as `explicit`)

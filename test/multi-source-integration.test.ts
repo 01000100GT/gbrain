@@ -1,5 +1,5 @@
 /**
- * v0.17.0 Step 9 — multi-source integration test against real PGLite.
+ * v0.18.0 Step 9 — multi-source integration test against real PGLite.
  *
  * Exercises the full Step-1-through-Step-7 surface:
  *   - migration v16 seeds the default source with federated=true
@@ -33,7 +33,7 @@ afterAll(async () => {
   await engine.disconnect();
 });
 
-describe('v0.17.0 — sources table seeded with default row on fresh PGLite', () => {
+describe('v0.18.0 — sources table seeded with default row on fresh PGLite', () => {
   test("sources('default') exists after initSchema + migration", async () => {
     const rows = await engine.executeRaw<{ id: string; name: string; config: string | Record<string, unknown> }>(
       `SELECT id, name, config FROM sources WHERE id = 'default'`,
@@ -62,7 +62,7 @@ describe('v0.17.0 — sources table seeded with default row on fresh PGLite', ()
   });
 });
 
-describe('v0.17.0 — putPage implicitly writes to default source', () => {
+describe('v0.18.0 — putPage implicitly writes to default source', () => {
   test('putPage without explicit source → source_id = default', async () => {
     await engine.putPage('topics/step9-auto', {
       type: 'concept',
@@ -77,7 +77,7 @@ describe('v0.17.0 — putPage implicitly writes to default source', () => {
   });
 });
 
-describe('v0.17.0 — composite UNIQUE allows same-slug across sources', () => {
+describe('v0.18.0 — composite UNIQUE allows same-slug across sources', () => {
   test('same slug in two different sources coexists (regression: Codex critical)', async () => {
     // Insert a second source via sources CLI.
     await runSources(engine, ['add', 'testsrc', '--no-federated']);
@@ -119,7 +119,7 @@ describe('v0.17.0 — composite UNIQUE allows same-slug across sources', () => {
   });
 });
 
-describe('v0.17.0 — sources CLI manipulates the sources table', () => {
+describe('v0.18.0 — sources CLI manipulates the sources table', () => {
   test('sources federate flips config.federated true', async () => {
     await runSources(engine, ['federate', 'testsrc']);
     const rows = await engine.executeRaw<{ config: string | Record<string, unknown> }>(
@@ -148,7 +148,7 @@ describe('v0.17.0 — sources CLI manipulates the sources table', () => {
   });
 });
 
-describe('v0.17.0 — source resolution priority (integration)', () => {
+describe('v0.18.0 — source resolution priority (integration)', () => {
   test('explicit --source flag wins when the source exists', async () => {
     const id = await resolveSourceId(engine, 'testsrc');
     expect(id).toBe('testsrc');
@@ -174,7 +174,7 @@ describe('v0.17.0 — source resolution priority (integration)', () => {
   });
 });
 
-describe('v0.17.0 — sources remove cascades to pages', () => {
+describe('v0.18.0 — sources remove cascades to pages', () => {
   test('removing a source cascade-deletes its pages', async () => {
     const before = await engine.executeRaw<{ n: number }>(
       `SELECT COUNT(*)::int AS n FROM pages WHERE source_id = 'testsrc'`,
@@ -201,7 +201,7 @@ describe('v0.17.0 — sources remove cascades to pages', () => {
   });
 });
 
-describe('v0.17.0 — links.resolution_type column exists (Step 4)', () => {
+describe('v0.18.0 — links.resolution_type column exists (Step 4)', () => {
   test('links table accepts qualified/unqualified resolution_type', async () => {
     // Create two pages, insert a link with resolution_type='qualified'.
     await engine.putPage('topics/qf-a', {
